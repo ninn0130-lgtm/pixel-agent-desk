@@ -34,8 +34,15 @@ function createWindow() {
   // 서버 모듈에 메인 윈도우 전달
   server.setMainWindow(mainWindow);
 
-  // 태스크바 위로 올리기 (최상단 레벨)
+  // 태스크바 위로 올리기 (최상단 레벨 - screen-saver)
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
+
+  // 주기적으로 최상단 유지
+  setInterval(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    }
+  }, 1000);
 }
 
 // Claude CLI 훅 자동 등록
@@ -94,6 +101,10 @@ function registerHooks() {
 
 // 앱 시작
 app.disableHardwareAcceleration(); // GPU 가속 비활성화
+
+// DPI 설정 고정 (프레임 어긋남 방지)
+app.commandLine.appendSwitch('high-dpi-support', '1');
+app.commandLine.appendSwitch('force-device-scale-factor', '1');
 
 app.whenReady().then(async () => {
   httpServer = await server.createHttpServer();
