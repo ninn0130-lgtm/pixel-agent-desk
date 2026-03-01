@@ -34,6 +34,7 @@ body {
   width: 48px;
   height: 64px;
   position: relative;
+  display: block;
 
   /* 스프라이트 시트 설정 */
   background-image: url('avatar_00.png');
@@ -46,6 +47,11 @@ body {
 
   /* 렌더링 위치를 정수로 고정 */
   transform: translateZ(0);
+
+  /* 여백 완전 제거 */
+  line-height: 0;
+  font-size: 0;
+
   overflow: hidden;
   /* 프레임 밖으로 나가는 이미지 차단 */
 }
@@ -55,65 +61,65 @@ body {
 
 @keyframes sprite-thinking {
   0% {
-    background-position: 0 0;
+    background-position: 0px 0px;
   }
 
   33.33% {
-    background-position: -48px 0;
+    background-position: -48px 0px;
   }
 
   66.66% {
-    background-position: -96px 0;
+    background-position: -96px 0px;
   }
 
   100% {
-    background-position: 0 0;
+    background-position: 0px 0px;
   }
 }
 
 @keyframes sprite-working {
   0% {
-    background-position: -144px 0;
+    background-position: -144px 0px;
   }
 
   50% {
-    background-position: -192px 0;
+    background-position: -192px 0px;
   }
 
   100% {
-    background-position: -144px 0;
+    background-position: -144px 0px;
   }
 }
 
 @keyframes sprite-error {
   0% {
-    background-position: -240px 0;
+    background-position: -240px 0px;
   }
 
   33.33% {
-    background-position: -288px 0;
+    background-position: -288px 0px;
   }
 
   66.66% {
-    background-position: -336px 0;
+    background-position: -336px 0px;
   }
 
   100% {
-    background-position: -240px 0;
+    background-position: -240px 0px;
   }
 }
 
 @keyframes sprite-alert {
   0% {
-    background-position: -384px 0;
+    background-position: -384px 0px;
   }
 
   50% {
-    background-position: 0 -64px;
+    background-position: 0px -64px;
   }
 
   100% {
-    background-position: -384px 0;
+    background-position: -384px 0px;
   }
 }
 
@@ -155,7 +161,7 @@ body {
   }
 
   66.66% {
-    background-position: 0 -128px;
+    background-position: 0px -128px;
   }
 
   100% {
