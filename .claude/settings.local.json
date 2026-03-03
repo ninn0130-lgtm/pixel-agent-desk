@@ -9,7 +9,11 @@
       "Bash(npm run:*)",
       "Bash(curl.exe:*)",
       "Bash(tasklist:*)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git:*)",
+      "Bash(echo:*)"
     ]
   }
 }

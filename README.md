@@ -1,22 +1,24 @@
-# Pixel Agent Desk 👾
+# Pixel Agent Desk v2.0 👾
 
-Claude CLI와 실시간으로 동기화되어 에이전트의 상태를 귀여운 픽셀 아트로 보여주는 데스크톱 애플리케이션입니다.
+Claude CLI의 JSONL 로그 파일을 실시간으로 감시하여 여러 에이전트의 상태를 픽셀 아트로 시각화하는 데스크톱 대시보드입니다.
 
 ![Pixel Agent Demo](avatar_00.png)
 
 ## 🌟 주요 기능
 
-- **실시간 상태 동기화**: Claude Code의 Hook 시스템을 이용해 에이전트가 생각 중인지, 일하는 중인지, 사용자 답변을 기다리는지 즉시 반영합니다.
-- **실시간 타이머**: 작업 중에는 경과 시간을(`Working... (01:20)`), 완료 후에는 최종 소요 시간을(`Done! (02:45)`) 실시간으로 표시합니다.
-- **5가지 핵심 상태 라벨**:
-  - `Waiting...`: 새로운 세션 시작 전이나 대화 종료 후 대기 상태
-  - `Working...`: 프롬프트 처리, 도구 사용, 서브 에이전트 가동 중
-  - `Done!`: 모든 작업이 성공적으로 완료됨
-  - `Error!`: 도구(Tool) 실행 중 오류가 발생한 상태
-  - `Help!`: 권한 승인 대기 또는 알림 확인 필요
-- **최상단 유지 (Always on Top)**: 터미널 작업 중에도 언제나 캐릭터를 볼 수 있도록 화면 최상단에 고정됩니다.
-- **캐릭터 드래그**: 마우스로 캐릭터를 원하는 위치로 드래그하여 배치할 수 있습니다.
-- **화면 경계 스냅**: 캐릭터가 화면 밖으로 나가는 것을 자동으로 방지합니다.
+- **Log-Only 아키텍처**: Hook 없이 JSONL 로그 파일만 감시 (Read-Only)
+- **실시간 감지**: `fs.watch` + 증분 읽기 — 변경된 바이트만 즉시 파싱
+- **멀티 에이전트 지원**: 최대 10개의 동시 작업 중인 에이전트를 각각의 픽셀 아바타로 표시 (동적 윈도우 리사이징)
+- **5단계 상태 시스템**:
+  - 💤 **Idle**: `stop_reason: "end_turn"` 또는 활동 없음
+  - 🧠 **Thinking**: `type: "assistant"` + `content[].type === "thinking"` (말풍선 ... 깜빡임)
+  - ⚙️ **Working**: `type: "progress"` 또는 `tool_use`
+  - 💬 **Reporting**: `type: "assistant"` + `content[].type === "text"`
+  - 🔴 **Offline**: `claude.exe` 프로세스가 해당 경로에서 종료됨 (흑백 캐릭터)
+- **터미널 포커스**: 에이전트 카드를 클릭하면 해당하는 터미널 창을 최상위로 가져옵니다.
+- **자동 퇴근**: 10분간 활동이 없는 에이전트 자동 제거 (Offline은 5분)
+- **최상단 유지 (Always on Top)**: 화면 최상단에 고정 (`focusable: false`로 포커스 뺏김 방지)
+- **드래그 가능**: 마우스로 화면 내 원하는 위치로 이동
 
 ## 🚀 시작하기
 
@@ -28,72 +30,67 @@ npm install
 ### 2. 실행
 ```bash
 npm start
-# 또는
-npm run dev
-# 또는
-npx electron .
 ```
 
-### 3. Claude Code 설정
-앱을 실행하면 자동으로 `~/.claude/settings.json`에 필요한 HTTP 훅이 등록됩니다. 별도의 수동 설정 없이도 Claude CLI를 실행하면 에이전트가 반응합니다.
+### 3. 사용
+Claude Code를 실행하면 `~/.claude/projects/`에 JSONL 로그가 자동 생성되고, Pixel Agent Desk가 이를 감지하여 상태를 시각화합니다.
 
 ## 🛠 기술 스택
+
 - **Framework**: Electron 32.0.0
 - **Runtime**: Node.js
-- **Frontend**: Vanilla JS, CSS (Glassmorphism & Pixel Art Rendering)
-- **Integration**: Claude Code Hook API (HTTP)
+- **Log Monitoring**: `fs.watch` + 증분 읽기 (실시간)
+- **Log Parsing**: JSONL 상태 판별 엔진
+- **Frontend**: Vanilla JS, CSS (Pixel Art Sprite Sheet)
 
 ## 📁 프로젝트 구조
 
 ```
 pixel-agent-desk/
-├── main.js           # Electron 메인 프로세스, HTTP 서버, 훅 관리
-├── server.js         # HTTP 서버, 상태 매핑, API 라우팅
-├── renderer.js       # 애니메이션 엔진, 타이머 로직, 상태 업데이트
-├── preload.js        # IPC 통신 브릿지 (contextBridge)
+├── main.js           # Electron 메인 프로세스, IPC 핸들러, 동적 리사이징
+├── logMonitor.js     # JSONL 파일 감시 (fs.watch + 증분 읽기 + pendingBuffer)
+├── jsonlParser.js    # JSONL 파싱 엔진, 역방향 tail 읽기
+├── agentManager.js   # 멀티 에이전트 관리 (EventEmitter)
+├── processWatcher.js # Claude 프로세스 감지 및 터미널 포커스
+├── renderer.js       # 애니메이션 엔진, 싱글/멀티 UI (가상 DOM 구조)
+├── preload.js        # IPC 통신 브릿지
 ├── index.html        # UI 구조
-├── styles.css        # 디자인 시스템 (Glassmorphism, 픽셀 렌더링, drag)
+├── styles.css        # 디자인 시스템 (상태 컬러링)
 ├── package.json      # 의존성 관리
-└── avatar_00.png     # 픽셀 캐릭터 스프라이트 시트 (48x64, 9x4 프레임)
+└── avatar_00.png     # 픽셀 캐릭터 스프라이트 시트 (48x64)
 ```
 
-## 🔧 HTTP API
+## 🔧 아키텍처
 
-### POST /agent/status
-에이전트 상태 업데이트를 수신합니다.
-
-```json
-{
-  "session_id": "string",
-  "hook_event_name": "string",
-  "message": "string"
-}
+```
+~/.claude/projects/*.jsonl
+       ↓ fs.watch
+logMonitor.js → jsonlParser.js → agentManager.js
+       ↓ IPC (preload.js)
+renderer.js (애니메이션 + 상태 라벨)
 ```
 
-### GET /agent/states
-현재 에이전트 상태를 조회합니다.
+## 📊 에이전트 상태
 
-### GET /health
-서버 상태를 확인합니다.
+| 상태 | 조건 | UI |
+|------|------|-----|
+| 💤 Idle | `stop_reason: "end_turn"` | 가만히 서 있기 (회색 말풍선) |
+| 🧠 Thinking | `assistant + thinking` | "..." 점 깜빡임 (파란 테두리) |
+| ⚙️ Working | `progress / tool_use` | 바쁘게 움직임 8fps (주황 진동) |
+| 💬 Reporting | `assistant + text` | 가만히 서 있기 (초록 말풍선) |
+| 🔴 Offline | 프로세스 없음 (PS WMI) | 흑백 캐릭터 (빨간 말풍선) |
 
 ## 📋 구현 현황
 
 ### ✅ 구현 완료
-- 실시간 상태 동기화 (Claude Hooks)
-- 자동 훅 등록 (기존 설정 보존)
-- 투명 배경 + Always on Top
-- 캐릭터 드래그 기능
-- 실시간 타이머 (작업 중 경과 시간, 완료 후 최종 시간)
-- 화면 경계 스냅
-- 백그라운드 애니메이션 최적화
-- 5가지 상태 애니메이션 (Waiting, Working, Done, Error, Help)
-
-### ⏳ 계획 중 / 미구현
-- 터미널 포커스 기능 (캐릭터 클릭 시 터미널 창 포커스)
-- 멀티 세션 지원 (여러 터미널 → 여러 캐릭터)
-- 설정 UI (포트, 창 크기 등)
-- 애니메이션 속도 조절
-- 다크/라이트 모드 지원
+- JSONL 로그 파일 실시간 감시 (fs.watch + 증분 읽기 완전 최적화)
+- 대용량 파일 역방향 읽기 (`tailFile`) 및 `pendingBuffer` 복구
+- 5단계 상태 시스템 (Offline 프로세스 감시 등)
+- 멀티 에이전트 지원 및 동적 창 리사이징
+- 싱글 ↔ 멀티 에이전트 UI 자동 전환
+- 터미널 포커스 (클릭 시 해당 터미널 창 호출)
+- 10분/5분 idle 프로세스 기반 자동 퇴근
+- 드래그 지원 및 `focusable: false`로 창숨김 완전 방지
 
 ## 📄 라이선스
 MIT License

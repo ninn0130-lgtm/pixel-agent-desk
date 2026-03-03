@@ -5,11 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Pixel Agent Desk</title>
   <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Inline style to ensure sprite loads correctly */
+    .character, .agent-character {
+      background-image: url('avatar_00.png') !important;
+    }
+  </style>
 </head>
 <body>
-  <div class="container" id="container">
-    <div class="speech-bubble" id="speech-bubble">Waiting...</div>
-    <div class="character" id="character"></div>
+  <!-- Agent Grid Container -->
+  <div class="agent-grid" id="agent-grid">
+    <!-- Single Agent Container (for backward compatibility) -->
+    <div class="container" id="container">
+      <div class="speech-bubble" id="speech-bubble">Loading...</div>
+      <div class="character" id="character"></div>
+    </div>
   </div>
 
   <script src="renderer.js"></script>

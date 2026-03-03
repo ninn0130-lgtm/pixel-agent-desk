@@ -1,13 +1,13 @@
 {
   "name": "pixel-agent-desk",
-  "version": "1.0.0",
-  "description": "Claude CLI 작업 상태를 픽셀 캐릭터로 시각화",
+  "version": "2.0.0",
+  "description": "Claude CLI JSONL logs를 실시간으로 감시하여 멀티 에이전트를 픽셀 아바타로 시각화",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev"
   },
-  "keywords": ["electron", "pixel-art", "claude-cli"],
+  "keywords": ["electron", "pixel-art", "claude-cli", "multi-agent", "jsonl"],
   "author": "",
   "license": "MIT",
   "devDependencies": {
