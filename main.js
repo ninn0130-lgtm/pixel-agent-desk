@@ -104,19 +104,14 @@ function setupClaudeHooks() {
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   try {
     let settings = {};
-    let parseOk = false;
 
     if (fs.existsSync(settingsPath)) {
       try {
         const rawContent = fs.readFileSync(settingsPath, 'utf8').replace(/^\uFEFF/, '');
         settings = JSON.parse(rawContent);
-        parseOk = true;
       } catch (parseErr) {
-        // settings.json이 손상된 경우 — 기존 파일은 백업하고 새로 시작
-        debugLog(`[Main] settings.json parse error: ${parseErr.message}. Backing up and resetting hooks only.`);
-        try {
-          fs.copyFileSync(settingsPath, settingsPath + '.corrupt_backup');
-        } catch (e) { }
+        debugLog(`[Main] settings.json parse error: ${parseErr.message}. Backing up and resetting.`);
+        try { fs.copyFileSync(settingsPath, settingsPath + '.corrupt_backup'); } catch (e) { }
         settings = {};
       }
     }
@@ -125,36 +120,23 @@ function setupClaudeHooks() {
 
     const hookUrl = `http://localhost:${HOOK_SERVER_PORT}/hook`;
 
-    // HTTP 훅 upsert (중복 방지)
+    // HTTP 훅 upsert: 포트 번호 기준으로 중복 제거
     const upsertHttpHook = (eventName) => {
-      let eventHooks = settings.hooks[eventName] || [];
-      // 기존 pixel-agent-desk HTTP 훅 제거
-      eventHooks = eventHooks.filter(container => {
-        if (!container.hooks) return true;
-        return !container.hooks.some(h => h.type === 'http' && h.url && h.url.includes(`:${HOOK_SERVER_PORT}`));
-      });
-      eventHooks.push({ matcher: "*", hooks: [{ type: "http", url: hookUrl }] });
-      settings.hooks[eventName] = eventHooks;
+      let hooks = settings.hooks[eventName] || [];
+      hooks = hooks.filter(c => !c.hooks?.some(h => h.type === 'http' && h.url?.includes(`:${HOOK_SERVER_PORT}`)));
+      hooks.push({ matcher: "*", hooks: [{ type: "http", url: hookUrl }] });
+      settings.hooks[eventName] = hooks;
     };
-
     upsertHttpHook('SessionStart');
     upsertHttpHook('SessionEnd');
 
-    // command 훅도 유지 (SessionEnd 정상 종료 시 JSONL 기록용)
+    // SessionEnd command 훅: HTTP 실패 시 JSONL 직접 기록용 보험
     const endScript = path.join(__dirname, 'sessionend_hook.js').replace(/\\/g, '/');
-    const endCmd = `node "${endScript}"`;
-    const upsertCmdHook = (eventName, cmd) => {
-      let eventHooks = settings.hooks[eventName] || [];
-      eventHooks = eventHooks.filter(container => {
-        if (!container.hooks) return true;
-        return !container.hooks.some(h => h.type === 'command' && h.command && h.command.includes('sessionend_hook'));
-      });
-      eventHooks.push({ matcher: "*", hooks: [{ type: "command", command: cmd }] });
-      settings.hooks[eventName] = eventHooks;
-    };
-    upsertCmdHook('SessionEnd', endCmd);
+    let endHooks = settings.hooks['SessionEnd'] || [];
+    endHooks = endHooks.filter(c => !c.hooks?.some(h => h.type === 'command' && h.command?.includes('sessionend_hook')));
+    endHooks.push({ matcher: "*", hooks: [{ type: "command", command: `node "${endScript}"` }] });
+    settings.hooks['SessionEnd'] = endHooks;
 
-    // Atomic Write: 먼저 .tmp에 쓰고 rename (Claude CLI 동시 쓰기 충돌 방지)
     const tmpPath = settingsPath + '.tmp';
     fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 4), 'utf-8');
     fs.renameSync(tmpPath, settingsPath);
@@ -167,14 +149,15 @@ function setupClaudeHooks() {
 // =====================================================
 // HTTP 훅 서버 — Claude CLI가 SessionStart/End를 POST로 알려줌
 // =====================================================
+// agentManager 준비 전에 도착한 SessionStart를 임시 보관
+const pendingSessionStarts = [];
+
 function startHookServer() {
   const http = require('http');
 
   const server = http.createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/hook') {
-      res.writeHead(404);
-      res.end();
-      return;
+      res.writeHead(404); res.end(); return;
     }
 
     let body = '';
@@ -187,62 +170,14 @@ function startHookServer() {
         const data = JSON.parse(body);
         const event = data.hook_event_name;
         const sessionId = data.session_id || data.sessionId;
-
         if (!sessionId) return;
 
-        debugLog(`[Hook] ${event} — session ${sessionId.slice(0, 8)}`);
+        debugLog(`[Hook] ${event} — session ${sessionId.slice(0, 8)} cwd=${data.cwd || ''}`);
 
         if (event === 'SessionStart') {
-          // agent_pids.json에 세션 등록 (PID는 스캔으로 추후 채워질 수 있음)
-          const pidFile = path.join(os.homedir(), '.claude', 'agent_pids.json');
-          try {
-            let pidsInfo = {};
-            if (fs.existsSync(pidFile)) {
-              try { pidsInfo = JSON.parse(fs.readFileSync(pidFile, 'utf8')); } catch (e) { }
-            }
-            pidsInfo[sessionId] = {
-              pid: 0,
-              cwd: data.cwd || '',
-              timestamp: new Date().toISOString(),
-              source: 'http'
-            };
-            const tmpFile = pidFile + '.tmp';
-            fs.writeFileSync(tmpFile, JSON.stringify(pidsInfo, null, 2));
-            fs.renameSync(tmpFile, pidFile);
-            debugLog(`[Hook] SessionStart recorded: ${sessionId.slice(0, 8)}`);
-          } catch (e) {
-            debugLog(`[Hook] Failed to record SessionStart: ${e.message}`);
-          }
-
+          handleSessionStart(sessionId, data.cwd || '');
         } else if (event === 'SessionEnd') {
-          // 즉시 에이전트 제거
-          if (agentManager) {
-            const agent = agentManager.getAgent(sessionId);
-            if (agent) {
-              debugLog(`[Hook] SessionEnd — removing agent ${sessionId.slice(0, 8)}`);
-              // JSONL에 SessionEnd 기록 (좀비 방지)
-              if (agent.jsonlPath && fs.existsSync(agent.jsonlPath)) {
-                try {
-                  fs.appendFileSync(agent.jsonlPath, JSON.stringify({
-                    type: "system", subtype: "SessionEnd",
-                    sessionId: agent.id, timestamp: new Date().toISOString()
-                  }) + '\n');
-                } catch (e) { }
-              }
-              agentManager.removeAgent(sessionId);
-              // agent_pids.json에서도 삭제
-              const pidFile = path.join(os.homedir(), '.claude', 'agent_pids.json');
-              try {
-                const pidsInfo = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
-                delete pidsInfo[sessionId];
-                const tmpFile = pidFile + '.tmp';
-                fs.writeFileSync(tmpFile, JSON.stringify(pidsInfo, null, 2));
-                fs.renameSync(tmpFile, pidFile);
-              } catch (e) { }
-            } else {
-              debugLog(`[Hook] SessionEnd for unknown agent ${sessionId.slice(0, 8)} (not yet active?)`);
-            }
-          }
+          handleSessionEnd(sessionId);
         }
       } catch (e) {
         debugLog(`[Hook] Parse error: ${e.message}`);
@@ -250,45 +185,62 @@ function startHookServer() {
     });
   });
 
-  server.on('error', (e) => {
-    debugLog(`[Hook] Server error: ${e.message}`);
-  });
-
+  server.on('error', (e) => debugLog(`[Hook] Server error: ${e.message}`));
   server.listen(HOOK_SERVER_PORT, '127.0.0.1', () => {
     debugLog(`[Hook] HTTP hook server listening on port ${HOOK_SERVER_PORT}`);
   });
 }
 
-function startPidMonitoring() {
-  const pidFile = path.join(os.homedir(), '.claude', 'agent_pids.json');
-  const { execFile } = require('child_process');
-  const SCAN_INTERVAL = 5000;          // 5초마다 스캔
-  const GRACE_PERIOD_MS = 15000;       // 에이전트 등록 후 15초간 보호
-  const MAX_ABSENT_COUNT = 3;          // 3회 연속 미발견 시 DEAD 판정
-  const absentCounts = new Map();      // agentId → 연속 미발견 횟수
-
-  // agent_pids.json이 없으면 빈 파일로 자동 생성
-  if (!fs.existsSync(pidFile)) {
-    try {
-      fs.writeFileSync(pidFile, '{}', 'utf-8');
-      debugLog('[Main] Created agent_pids.json (empty)');
-    } catch (e) {
-      debugLog(`[Main] Failed to create agent_pids.json: ${e.message}`);
-    }
+function handleSessionStart(sessionId, cwd) {
+  if (!agentManager) {
+    // agentManager가 아직 준비 안 됐으면 대기열에 보관
+    pendingSessionStarts.push({ sessionId, cwd, ts: Date.now() });
+    debugLog(`[Hook] SessionStart queued (agentManager not ready): ${sessionId.slice(0, 8)}`);
+    return;
   }
+  const displayName = cwd ? require('path').basename(cwd) : 'Agent';
+  agentManager.updateAgent({
+    sessionId,
+    projectPath: cwd,
+    displayName,
+    state: 'Waiting',
+    jsonlPath: null
+  }, 'http');
+  debugLog(`[Hook] SessionStart → agent registered: ${sessionId.slice(0, 8)} (${displayName})`);
+}
 
-  // 시스템에서 claude-code CLI node.exe 프로세스 목록을 가져오는 함수
+function handleSessionEnd(sessionId) {
+  if (!agentManager) return;
+  const agent = agentManager.getAgent(sessionId);
+  if (agent) {
+    debugLog(`[Hook] SessionEnd → removing agent ${sessionId.slice(0, 8)}`);
+    // JSONL에 SessionEnd 기록 (LogMonitor 좀비 방지)
+    if (agent.jsonlPath && fs.existsSync(agent.jsonlPath)) {
+      try {
+        fs.appendFileSync(agent.jsonlPath, JSON.stringify({
+          type: 'system', subtype: 'SessionEnd',
+          sessionId: agent.id, timestamp: new Date().toISOString()
+        }) + '\n');
+      } catch (e) { }
+    }
+    agentManager.removeAgent(sessionId);
+  } else {
+    debugLog(`[Hook] SessionEnd for unknown agent ${sessionId.slice(0, 8)}`);
+  }
+}
+
+function startProcessScanner() {
+  const { execFile } = require('child_process');
+  const SCAN_INTERVAL = 5000;
+  const GRACE_PERIOD_MS = 15000;  // 등록 후 15초는 스캔 제외
+  const MAX_ABSENT = 3;           // 3회 연속 미발견 시 DEAD
+  const absentCounts = new Map();
+
   function scanClaudeProcesses(callback) {
     const psCmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude-code*cli.js*' } | ForEach-Object { $_.ProcessId }`;
-    execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 8000 }, (err, stdout, stderr) => {
-      if (err) {
-        debugLog(`[Main] Scan error: ${err.message}`);
-        callback([]);
-        return;
-      }
-      const pids = stdout.trim().split('\n')
-        .map(l => parseInt(l.trim(), 10))
-        .filter(p => p > 0);
+    execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 8000 }, (err, stdout) => {
+      if (err) { debugLog(`[Scan] Error: ${err.message}`); callback([]); return; }
+      const pids = stdout.trim().split('\n').map(l => parseInt(l.trim(), 10)).filter(p => p > 0);
       callback(pids);
     });
   }
@@ -299,79 +251,46 @@ function startPidMonitoring() {
     if (agents.length === 0) return;
 
     scanClaudeProcesses((livePids) => {
-      debugLog(`[Main] Scan: ${livePids.length} claude proc(s), ${agents.length} agent(s)`);
+      debugLog(`[Scan] ${livePids.length} proc(s), ${agents.length} agent(s)`);
 
-      // 활성 에이전트 중 Grace Period 제외한 것만 체크 대상
+      // Grace Period 내 에이전트는 체크 제외
       const checkable = agents.filter(a => {
-        if (a.firstSeen && (Date.now() - a.firstSeen < GRACE_PERIOD_MS)) {
-          absentCounts.delete(a.id);
-          return false;
+        if (a.firstSeen && Date.now() - a.firstSeen < GRACE_PERIOD_MS) {
+          absentCounts.delete(a.id); return false;
         }
         return true;
       });
-
       if (checkable.length === 0) return;
 
-      // 에이전트 수 ≤ 프로세스 수 → 모두 살아있다고 판단
+      // 프로세스 수 ≥ 에이전트 수 → 모두 살아있음
       if (livePids.length >= checkable.length) {
         for (const a of checkable) absentCounts.delete(a.id);
         return;
       }
 
-      // 에이전트 수 > 프로세스 수 → 초과분을 제거해야 함
-      // JSONL 파일 mtime 기준: 터미널이 닫히면 파일 갱신이 즉시 멈추므로
-      // mtime이 가장 오래된 에이전트가 죽은 것일 확률이 높음
+      // 초과 에이전트: jsonlPath mtime 기준으로 가장 오래된 것부터 suspect
       const excessCount = checkable.length - livePids.length;
-
-      // JSONL mtime 가져오기 (파일이 없으면 0)
       const withMtime = checkable.map(a => {
         let mtime = 0;
-        try {
-          if (a.jsonlPath) mtime = fs.statSync(a.jsonlPath).mtimeMs;
-        } catch (e) { }
+        try { if (a.jsonlPath) mtime = fs.statSync(a.jsonlPath).mtimeMs; } catch (e) { }
         return { agent: a, mtime };
-      });
+      }).sort((a, b) => a.mtime - b.mtime);
 
-      // mtime 오름차순 (가장 오래된 것 = 죽었을 확률 높음)
-      withMtime.sort((a, b) => a.mtime - b.mtime);
+      for (const { agent } of withMtime.slice(excessCount)) absentCounts.delete(agent.id);
 
-      const suspect = withMtime.slice(0, excessCount).map(w => w.agent);
-      const alive = withMtime.slice(excessCount).map(w => w.agent);
-
-      for (const a of alive) absentCounts.delete(a.id);
-
-      for (const agent of suspect) {
+      for (const { agent } of withMtime.slice(0, excessCount)) {
         const count = (absentCounts.get(agent.id) || 0) + 1;
         absentCounts.set(agent.id, count);
-
-        if (count < MAX_ABSENT_COUNT) {
-          debugLog(`[Main] Agent ${agent.id.slice(0, 8)} suspect (excess), absent ${count}/${MAX_ABSENT_COUNT}`);
+        if (count < MAX_ABSENT) {
+          debugLog(`[Scan] Agent ${agent.id.slice(0, 8)} suspect ${count}/${MAX_ABSENT}`);
           continue;
         }
-
-        // ── 3회 연속: DEAD 확정 ──
-        debugLog(`[Main] Agent ${agent.id.slice(0, 8)} DEAD — excess agent removed after ${count} scans`);
+        debugLog(`[Scan] Agent ${agent.id.slice(0, 8)} DEAD after ${count} scans`);
         absentCounts.delete(agent.id);
-
-        // JSONL에 SessionEnd 기록 (좀비 방지)
         if (agent.jsonlPath && fs.existsSync(agent.jsonlPath)) {
-          try {
-            fs.appendFileSync(agent.jsonlPath, JSON.stringify({
-              type: "system", subtype: "SessionEnd", sessionId: agent.id, timestamp: new Date().toISOString()
-            }) + '\n');
-          } catch (e) { }
+          try { fs.appendFileSync(agent.jsonlPath, JSON.stringify({ type: 'system', subtype: 'SessionEnd', sessionId: agent.id, timestamp: new Date().toISOString() }) + '\n'); } catch (e) { }
         }
-
         agentManager.removeAgent(agent.id);
-
-        // agent_pids.json에서도 삭제
-        try {
-          const pidsInfo = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
-          delete pidsInfo[agent.id];
-          const tmpFile = pidFile + '.tmp';
-          fs.writeFileSync(tmpFile, JSON.stringify(pidsInfo, null, 2));
-          fs.renameSync(tmpFile, pidFile);
-        } catch (e) { }
       }
     });
   }, SCAN_INTERVAL);
@@ -379,9 +298,9 @@ function startPidMonitoring() {
 
 app.whenReady().then(() => {
   debugLog('Pixel Agent Desk started');
-  startHookServer();      // HTTP 훅 서버 먼저 시작
-  setupClaudeHooks();     // 훅 설정 등록
-  startPidMonitoring();   // 스캔 방식 백업 유지
+  startHookServer();       // HTTP 훅 서버 먼저 시작
+  setupClaudeHooks();      // 훅 설정 등록
+  startProcessScanner();   // 강제 종료 백업 스캔
   createWindow();
 
 
@@ -391,6 +310,12 @@ app.whenReady().then(() => {
     agentManager = new AgentManager();
     agentManager.start();
     debugLog('[Main] AgentManager started');
+
+    // agentManager 준비 전에 도착한 SessionStart 처리
+    while (pendingSessionStarts.length > 0) {
+      const { sessionId, cwd } = pendingSessionStarts.shift();
+      handleSessionStart(sessionId, cwd);
+    }
 
     // 에이전트 이벤트 → renderer IPC 전달 + 동적 리사이징
     agentManager.on('agent-added', (agent) => {
