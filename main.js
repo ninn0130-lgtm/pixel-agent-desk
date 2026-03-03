@@ -104,33 +104,40 @@ function setupClaudeHooks() {
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   try {
     let settings = {};
-
     if (fs.existsSync(settingsPath)) {
       try {
         const rawContent = fs.readFileSync(settingsPath, 'utf8').replace(/^\uFEFF/, '');
         settings = JSON.parse(rawContent);
       } catch (parseErr) {
-        debugLog(`[Main] settings.json parse error: ${parseErr.message}. Backing up and resetting.`);
+        debugLog(`[Main] settings.json parse error: ${parseErr.message}. Backing up.`);
         try { fs.copyFileSync(settingsPath, settingsPath + '.corrupt_backup'); } catch (e) { }
         settings = {};
       }
     }
-
     if (!settings.hooks) settings.hooks = {};
 
-    const hookUrl = `http://localhost:${HOOK_SERVER_PORT}/hook`;
+    const hookScript = path.join(__dirname, 'hook.js').replace(/\\/g, '/');
+    const hookCmd = `node "${hookScript}"`;
 
-    // HTTP 훅 upsert: 포트 번호 기준으로 중복 제거
-    const upsertHttpHook = (eventName) => {
+    // command 훅으로 모든 이벤트를 hook.js로 전달 → hook.js가 HTTP 서버로 POST
+    const HOOK_EVENTS = [
+      'SessionStart', 'SessionEnd',
+      'PreToolUse', 'PostToolUse',
+      'TaskCompleted', 'PermissionRequest',
+      'SubagentStart', 'SubagentStop',
+    ];
+
+    for (const eventName of HOOK_EVENTS) {
       let hooks = settings.hooks[eventName] || [];
+      // 기존 hook.js 훅 제거 (중복 방지)
+      hooks = hooks.filter(c => !c.hooks?.some(h => h.type === 'command' && h.command?.includes('hook.js')));
+      // 기존 http 훅도 제거 (Claude CLI가 http 훅을 보내지 않으므로)
       hooks = hooks.filter(c => !c.hooks?.some(h => h.type === 'http' && h.url?.includes(`:${HOOK_SERVER_PORT}`)));
-      hooks.push({ matcher: "*", hooks: [{ type: "http", url: hookUrl }] });
+      hooks.push({ matcher: "*", hooks: [{ type: "command", command: hookCmd }] });
       settings.hooks[eventName] = hooks;
-    };
-    upsertHttpHook('SessionStart');
-    upsertHttpHook('SessionEnd');
+    }
 
-    // SessionEnd command 훅: HTTP 실패 시 JSONL 직접 기록용 보험
+    // SessionEnd 추가: JSONL 직접 기록 보험 (강제 종료 직전 sessionend_hook.js 실행)
     const endScript = path.join(__dirname, 'sessionend_hook.js').replace(/\\/g, '/');
     let endHooks = settings.hooks['SessionEnd'] || [];
     endHooks = endHooks.filter(c => !c.hooks?.some(h => h.type === 'command' && h.command?.includes('sessionend_hook')));
@@ -140,7 +147,7 @@ function setupClaudeHooks() {
     const tmpPath = settingsPath + '.tmp';
     fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 4), 'utf-8');
     fs.renameSync(tmpPath, settingsPath);
-    debugLog(`[Main] Registered HTTP hooks (port ${HOOK_SERVER_PORT}) to settings.json`);
+    debugLog(`[Main] Registered all hooks via hook.js`);
   } catch (e) {
     debugLog(`[Main] Failed to setup hooks: ${e.message}`);
   }
@@ -172,12 +179,56 @@ function startHookServer() {
         const sessionId = data.session_id || data.sessionId;
         if (!sessionId) return;
 
-        debugLog(`[Hook] ${event} — session ${sessionId.slice(0, 8)} cwd=${data.cwd || ''}`);
+        debugLog(`[Hook] ${event} session=${sessionId.slice(0, 8)}`);
 
-        if (event === 'SessionStart') {
-          handleSessionStart(sessionId, data.cwd || '');
-        } else if (event === 'SessionEnd') {
-          handleSessionEnd(sessionId);
+        switch (event) {
+          case 'SessionStart':
+            handleSessionStart(sessionId, data.cwd || '');
+            break;
+
+          case 'SessionEnd':
+            handleSessionEnd(sessionId);
+            break;
+
+          case 'PreToolUse':
+          case 'PostToolUse':
+            // 도구 사용 중 → Working
+            if (agentManager) {
+              const agent = agentManager.getAgent(sessionId);
+              if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Working' }, 'hook');
+            }
+            break;
+
+          case 'TaskCompleted':
+            // AI 응답 완료 → Done
+            if (agentManager) {
+              const agent = agentManager.getAgent(sessionId);
+              if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Done' }, 'hook');
+            }
+            break;
+
+          case 'PermissionRequest':
+            // 권한 요청 → Help (사용자 입력 필요)
+            if (agentManager) {
+              const agent = agentManager.getAgent(sessionId);
+              if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Help' }, 'hook');
+            }
+            break;
+
+          case 'SubagentStart': {
+            const subId = data.subagent_session_id || data.agent_id;
+            if (subId) handleSessionStart(subId, data.cwd || '');
+            break;
+          }
+
+          case 'SubagentStop': {
+            const subId = data.subagent_session_id || data.agent_id;
+            if (subId) handleSessionEnd(subId);
+            break;
+          }
+
+          default:
+            debugLog(`[Hook] Unknown event: ${event} — ${JSON.stringify(data).slice(0, 200)}`);
         }
       } catch (e) {
         debugLog(`[Hook] Parse error: ${e.message}`);
