@@ -513,6 +513,7 @@ function handleSessionStart(sessionId, cwd, pid = 0, isTeammate = false) {
     return;
   }
   const psCmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude*cli.js*' } | Select-Object -ExpandProperty ProcessId`;
+  const { execFile } = require('child_process');
   execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 6000 }, (err, stdout) => {
     if (err || !stdout) return;
     const allPids = stdout.trim().split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
