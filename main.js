@@ -372,22 +372,26 @@ function recoverExistingSessions() {
         } catch (e) { }
       }
 
-      // 3. 복구된 세션 등록
+      // 3. 복구된 세션 등록 + PID 매핑
       for (let i = 0; i < recoveredSessions.length; i++) {
         const { sessionId, cwd, filePath } = recoveredSessions[i];
+        const pid = livePids[i]; // WMI로 얻은 실제 claude PID
 
         const displayName = cwd ? require('path').basename(cwd) : 'Agent';
 
-        // 중요: 기존 세션은 초기화가 끝났으므로 UserPromptSubmit 전 1회 무시 로직을 우회하도록 설정
+        // 실제 PID 저장 (생사확인 + 터미널 포커스용)
+        sessionPids.set(sessionId, pid);
+
+        // 기존 세션은 초기화 완료 → PreToolUse 첫 번째 무시 로직 우회
         firstPreToolUseDone.set(sessionId, true);
 
-        // recovered된 에이전트는 firstSeen을 의도적으로 과거로 밀어 Liveness Checker 유예기간을 없앰
+        // firstSeen을 30초 과거로 설정해 Grace 기간 건너뜀
         const recoveredAgent = agentManager.updateAgent({ sessionId, projectPath: cwd, displayName, state: 'Waiting', jsonlPath: filePath }, 'recover');
         if (recoveredAgent) recoveredAgent.firstSeen = Date.now() - 30000;
 
-        debugLog(`[Recover] Restored: ${sessionId.slice(0, 8)} (${displayName})`);
+        debugLog(`[Recover] Restored: ${sessionId.slice(0, 8)} (${displayName}) pid=${pid}`);
       }
-      debugLog(`[Recover] Done — ${recoveredSessions.length} session(s) recovered based on live processes`);
+      debugLog(`[Recover] Done — ${recoveredSessions.length} session(s) with real PIDs`);
 
     } catch (e) {
       debugLog(`[Recover] Error: ${e.message}`);
@@ -396,50 +400,47 @@ function recoverExistingSessions() {
 }
 
 // =====================================================
-// 생사 확인: claude 프로세스 개수 === 에이전트 개수 비교
+// 생사 확인: sessionPids의 실제 PID로 process.kill(pid,0) 직접 체크
+// PID 없는 경우(새 세션 등)는 Grace 기간 내 훅이 오면 자동 등록됨
 // =====================================================
-function startLivenessChecker() {
-  const { execFile } = require('child_process');
-  const INTERVAL = 3000;   // 3초마다 확인
-  const GRACE_MS = 10000;  // 등록 직후 10초는 스킵
-  const MAX_MISS = 2;      // 2회 연속 초과 시 DEAD
-  const missCount = new Map();
+const sessionPids = new Map(); // sessionId → 실제 claude 프로세스 PID
 
-  const psCmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude*cli.js*' } | Measure-Object | Select-Object -ExpandProperty Count`;
+function startLivenessChecker() {
+  const INTERVAL = 3000;   // 3초
+  const GRACE_MS = 15000;  // 등록 후 15초는 스킵 (WMI 조회 완료 전 유예)
+  const MAX_MISS = 2;      // 2회 연속 실패 → DEAD (~6초)
+  const missCount = new Map();
 
   setInterval(() => {
     if (!agentManager) return;
-    const agents = agentManager.getAllAgents();
-    if (agents.length === 0) { missCount.clear(); return; }
-
-    execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 8000 }, (err, stdout) => {
-      if (err) return;
-      const liveCount = parseInt(stdout.trim(), 10) || 0;
-
-      const checkable = agents.filter(a => !a.firstSeen || Date.now() - a.firstSeen >= GRACE_MS);
-      if (checkable.length === 0) return;
-
-      if (liveCount >= checkable.length) {
-        for (const a of checkable) missCount.delete(a.id);
-        return;
+    for (const agent of agentManager.getAllAgents()) {
+      // Grace 기간 내 스킵
+      if (agent.firstSeen && Date.now() - agent.firstSeen < GRACE_MS) {
+        missCount.delete(agent.id);
+        continue;
       }
 
-      const excess = checkable.length - liveCount;
-      const sorted = [...checkable].sort((a, b) => (a.lastActivity || 0) - (b.lastActivity || 0));
+      const pid = sessionPids.get(agent.id);
+      if (!pid) continue; // PID 없으면 스킵 (Grace 내에 훅으로 등록됨)
 
-      for (const a of sorted.slice(excess)) missCount.delete(a.id);
-      for (const a of sorted.slice(0, excess)) {
-        const n = (missCount.get(a.id) || 0) + 1;
-        missCount.set(a.id, n);
+      let alive = false;
+      try { process.kill(pid, 0); alive = true; } catch (e) { }
+
+      if (alive) {
+        missCount.delete(agent.id);
+      } else {
+        const n = (missCount.get(agent.id) || 0) + 1;
+        missCount.set(agent.id, n);
         if (n < MAX_MISS) {
-          debugLog(`[Live] ${a.id.slice(0, 8)} suspect ${n}/${MAX_MISS}`);
+          debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} miss ${n}/${MAX_MISS}`);
         } else {
-          debugLog(`[Live] ${a.id.slice(0, 8)} DEAD → removing`);
-          missCount.delete(a.id);
-          agentManager.removeAgent(a.id);
+          debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} DEAD → removing`);
+          missCount.delete(agent.id);
+          sessionPids.delete(agent.id);
+          agentManager.removeAgent(agent.id);
         }
       }
-    });
+    }
   }, INTERVAL);
 }
 
@@ -450,15 +451,23 @@ function handleSessionStart(sessionId, cwd) {
     debugLog(`[Hook] SessionStart queued: ${sessionId.slice(0, 8)}`);
     return;
   }
-  const displayName = cwd ? require('path').basename(cwd) : 'Agent';
-  agentManager.updateAgent({
-    sessionId,
-    projectPath: cwd,
-    displayName,
-    state: 'Waiting',
-    jsonlPath: null
-  }, 'http');
-  debugLog(`[Hook] SessionStart → agent: ${sessionId.slice(0, 8)} pid=${pid} (${displayName})`);
+  const displayName = cwd ? path.basename(cwd) : 'Agent';
+  agentManager.updateAgent({ sessionId, projectPath: cwd, displayName, state: 'Waiting', jsonlPath: null }, 'http');
+  debugLog(`[Hook] SessionStart → agent: ${sessionId.slice(0, 8)} (${displayName})`);
+
+  // 신규 세션: WMI로 미등록 claude PID 중 가장 최신 것을 할당
+  const { execFile } = require('child_process');
+  const psCmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude*cli.js*' } | Select-Object -ExpandProperty ProcessId`;
+  execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 6000 }, (err, stdout) => {
+    if (err || !stdout) return;
+    const allPids = stdout.trim().split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
+    const registeredPids = new Set(sessionPids.values());
+    const newPid = allPids.find(p => !registeredPids.has(p));
+    if (newPid) {
+      sessionPids.set(sessionId, newPid);
+      debugLog(`[Hook] SessionStart PID assigned: ${sessionId.slice(0, 8)} → pid=${newPid}`);
+    }
+  });
 }
 
 function handleSessionEnd(sessionId) {
