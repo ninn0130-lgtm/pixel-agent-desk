@@ -122,17 +122,17 @@ body {
   /* has-multiple 시 flex로 */
   flex-direction: column;
   align-items: center;
+  justify-content: flex-end;
+  /* 말풍선이 2줄 이상이 되면 위로 늘어나고, 캐릭터 바닥은 고정됨 */
   position: relative;
-  cursor: pointer;
   pointer-events: auto;
   /* 카드 영역 클릭 감지 */
-  transition: transform 0.15s ease;
   width: 90px;
-  pointer-events: auto;
-  transition: transform 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
   padding-bottom: 5px;
   border: 1px solid transparent;
   border-radius: 8px;
+  min-height: 130px;
+  /* 말풍선 줄바꿈 여유 공간 확보 */
 }
 
 /* ════════════════════════════════════════
@@ -235,11 +235,15 @@ body {
   display: flex;
 }
 
-.agent-card:hover {
+.agent-character {
+  transition: transform 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+.agent-character:hover {
   transform: translateY(-4px);
 }
 
-.agent-card:active {
+.agent-character:active {
   transform: scale(0.94);
 }
 
@@ -378,49 +382,13 @@ body {
   white-space: nowrap;
   text-align: center;
   z-index: 10;
+  pointer-events: none;
+  /* 클릭 타겟에서 제외하여 부모(character)가 클릭을 받게 유도 */
 }
 
+/* 터미널 포커스 전용 찌르기 메시지 테두리 애니메이션 보조 등 여백 */
 
-/* 닫기 버튼 (X) - Hover 시 보임 */
-
-.agent-close-btn,
-.agent-dismiss {
-  position: absolute;
-  top: 14px;
-  right: -5px;
-  width: 16px;
-  height: 16px;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
-  border: none;
-  border-radius: 50%;
-  font-size: 14px;
-  font-weight: bold;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s, background 0.2s;
-  pointer-events: auto;
-  z-index: 100;
-  padding: 0;
-  line-height: 1;
-}
-
-.agent-card:hover .agent-close-btn,
-.agent-card:hover .agent-dismiss {
-  opacity: 1;
-}
-
-.agent-close-btn:hover,
-.agent-dismiss:hover {
-  background: #f44336;
-}
-
-/* ════════════════════════════════════════
-   상태별 컬러 시스템
-════════════════════════════════════════ */
+상태별 컬러 시스템 ════════════════════════════════════════ */
 
 /* Idle (gray) */
 .agent-card[data-state="idle"] .agent-bubble {

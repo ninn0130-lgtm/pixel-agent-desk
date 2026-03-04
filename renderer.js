@@ -200,17 +200,7 @@ function createAgentCard(agent) {
   const character = document.createElement('div');
   character.className = 'agent-character';
 
-  // Create dismiss button
-  const dismissBtn = document.createElement('button');
-  dismissBtn.className = 'agent-dismiss';
-  dismissBtn.textContent = '×';
-  dismissBtn.title = 'Dismiss agent';
-  dismissBtn.onclick = (e) => {
-    e.stopPropagation();
-    if (window.electronAPI) {
-      window.electronAPI.dismissAgent(agent.id);
-    }
-  };
+  // dismissBtn 관련 코드 삭제됨
 
   // 카드 타입 구분 (배지 및 테두리)
   let typeLabel = 'Main';
@@ -248,10 +238,13 @@ function createAgentCard(agent) {
   nameBadge.title = agent.displayName; // 긴 이름일 경우 기본 툴팁
 
   // Assemble card
+  card.appendChild(header);
   card.appendChild(bubble);
   card.appendChild(character);
   card.appendChild(nameBadge);
-  card.appendChild(dismissBtn);
+
+  // 캐릭터 영역에만 클릭 이벤트 (터미널 표출 및 상호작용) 할당
+  character.style.cursor = 'pointer';
 
   // 찌르기(Poke) 상호작용 - 터미널 포커스 대신 재미있는 반응 추가
   const pokeMessages = [
@@ -266,7 +259,9 @@ function createAgentCard(agent) {
   ];
 
   let pokeTimeout = null;
-  card.onclick = () => {
+  character.onclick = (e) => {
+    e.stopPropagation(); // 카드 밖 영역 등 상위로 전파 방지
+
     // 1. 터미널 포커스 호출 (실제 PID 활용)
     if (window.electronAPI && window.electronAPI.focusTerminal) {
       window.electronAPI.focusTerminal(agent.id);
