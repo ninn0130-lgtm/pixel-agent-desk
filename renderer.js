@@ -23,13 +23,13 @@ const ANIM_SEQUENCES = {
 
 // --- 상태별 맵핑 ---
 const stateConfig = {
-  'Working': { anim: 'working', class: 'state-working', label: '⚡ Working...' },
-  'Thinking': { anim: 'working', class: 'state-working', label: '💭 Thinking...' },
-  'Done': { anim: 'complete', class: 'state-complete', label: '✓ Done!' },
-  'Waiting': { anim: 'waiting', class: 'state-waiting', label: '⏳ Waiting...' },
-  'Error': { anim: 'alert', class: 'state-alert', label: '⚠️ Error!' },
-  'Help': { anim: 'alert', class: 'state-alert', label: '⚠️ Help!' },
-  'Offline': { anim: 'waiting', class: 'state-offline', label: '💤 Offline' }
+  'Working': { anim: 'working', class: 'state-working', label: 'Working...' },
+  'Thinking': { anim: 'working', class: 'state-working', label: 'Thinking...' },
+  'Done': { anim: 'complete', class: 'state-complete', label: 'Done!' },
+  'Waiting': { anim: 'waiting', class: 'state-waiting', label: 'Waiting...' },
+  'Error': { anim: 'alert', class: 'state-alert', label: 'Error!' },
+  'Help': { anim: 'alert', class: 'state-alert', label: 'Help!' },
+  'Offline': { anim: 'waiting', class: 'state-offline', label: 'Offline' }
 };
 
 // --- 에이전트별 상태 관리 ---
@@ -171,6 +171,12 @@ function updateAgentState(agentId, container, agentOrState) {
     config.label = "Managing..."; // "Managing Subs..."는 너무 길 수 있음
   }
 
+  // currentTool이 있으면 Working 라벨에 도구명 표시
+  const currentTool = isAgentObj ? agentOrState.currentTool : null;
+  if (currentTool && state === 'Working') {
+    config.label = currentTool;
+  }
+
   const bubble = container.querySelector('.agent-bubble');
   const character = container.querySelector('.agent-character');
 
@@ -211,10 +217,8 @@ function updateAgentState(agentId, container, agentOrState) {
   if (config.anim === 'working') {
     if (!agentState.startTime) {
       agentState.startTime = Date.now();
-      if (agentState.timerInterval) {
-        clearInterval(agentState.timerInterval);
-      }
-
+    }
+    if (!agentState.timerInterval) {
       agentState.timerInterval = setInterval(() => {
         const elapsed = Date.now() - agentState.startTime;
         agentState.lastFormattedTime = window.electronAPI.formatTime(elapsed);
@@ -232,7 +236,7 @@ function updateAgentState(agentId, container, agentOrState) {
     }
 
   } else if (config.anim === 'complete') {
-    // Task complete - stop timer and keep final time
+    // Task complete - 타이머 멈추되 startTime은 유지 (다음 턴에서 이어감)
     if (agentState.timerInterval) {
       clearInterval(agentState.timerInterval);
       agentState.timerInterval = null;
@@ -241,10 +245,10 @@ function updateAgentState(agentId, container, agentOrState) {
       const finalTime = agentState.lastFormattedTime || '00:00';
       bubble.textContent = `${config.label} (${finalTime})`;
     }
-    agentState.startTime = null;
+    // startTime 유지 — Working으로 복귀 시 누적 시간 이어감
 
   } else {
-    // Other states - clear timer
+    // Other states (Waiting, Help, Error, Offline) - 타이머 완전 리셋
     if (agentState.timerInterval) {
       clearInterval(agentState.timerInterval);
       agentState.timerInterval = null;
@@ -308,35 +312,20 @@ function createAgentCard(agent) {
   let typeLabel = 'Main';
   let typeClass = 'type-main';
   if (agent.isSubagent) {
-    typeLabel = 'Sub';
+    typeLabel = agent.agentType ? agent.agentType : 'Sub';
     typeClass = 'type-sub';
   } else if (agent.isTeammate) {
-    typeLabel = 'Team';
+    typeLabel = agent.teammateName || 'Team';
     typeClass = 'type-team';
   }
   card.classList.add(typeClass);
 
-  // 상단 배지 (프로젝트명 + 타입)
-  const header = document.createElement('div');
-  header.className = 'agent-header';
-
-  const projectTagWrapper = document.createElement('div');
-  projectTagWrapper.className = 'project-tag-wrapper';
-  projectTagWrapper.setAttribute('data-full-path', agent.projectPath || 'No Path');
-
-  const projectTag = document.createElement('span');
-  projectTag.className = 'project-tag';
-  projectTag.textContent = agent.projectPath ? agent.projectPath.split(/[\\/]/).pop() : 'Default';
-
-  projectTagWrapper.appendChild(projectTag);
-
+  // 상단 배지 (타입만 — 프로젝트명은 툴팁으로)
   const typeTag = document.createElement('span');
   typeTag.className = `type-tag ${typeClass}`;
   typeTag.textContent = typeLabel;
-
-  header.appendChild(projectTagWrapper);
-  header.appendChild(typeTag);
-  card.appendChild(header);
+  typeTag.title = agent.projectPath || '';
+  card.appendChild(typeTag);
 
   // Create agent name (직책/이름 표시)
   const nameBadge = document.createElement('div');
@@ -351,47 +340,48 @@ function createAgentCard(agent) {
   }
 
   // Assemble card
-  card.appendChild(header);
   card.appendChild(bubble);
   card.appendChild(character);
   card.appendChild(nameBadge);
 
-  // 캐릭터 영역에만 클릭 이벤트 (터미널 표출 및 상호작용) 할당
-  character.style.cursor = 'pointer';
-  character.setAttribute('role', 'button');
-  character.setAttribute('tabindex', '0');
-  character.setAttribute('aria-label', `Focus terminal for ${agent.displayName || 'Agent'}`);
+  // 터미널 포커스 버튼 (카드 우측 상단)
+  const focusBtn = document.createElement('button');
+  focusBtn.className = 'focus-terminal-btn';
+  focusBtn.textContent = '>';
+  focusBtn.title = 'Focus terminal';
+  focusBtn.setAttribute('aria-label', `Focus terminal for ${agent.displayName || 'Agent'}`);
+  focusBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (window.electronAPI && window.electronAPI.focusTerminal) {
+      window.electronAPI.focusTerminal(agent.id);
+    }
+    // 클릭 피드백
+    focusBtn.classList.add('clicked');
+    setTimeout(() => focusBtn.classList.remove('clicked'), 300);
+  };
+  card.appendChild(focusBtn);
 
-  // 찌르기(Poke) 상호작용 - 터미널 포커스 대신 재미있는 반응 추가
+  // 캐릭터 찌르기(Poke) 상호작용
+  character.style.cursor = 'pointer';
   const pokeMessages = [
     "앗, 깜짝이야!",
     "열심히 일하는 중입니다!",
-    "코드 짜는 중... 💻",
-    "커피가 필요해요 ☕",
+    "코드 짜는 중...",
+    "커피가 필요해요",
     "이 부분 버그 아니죠?",
     "간지러워요!",
     "제 타수 엄청 빠르죠?",
-    "칭찬해주세요! 🌟"
+    "칭찬해주세요!"
   ];
 
   let pokeTimeout = null;
   character.onclick = (e) => {
-    e.stopPropagation(); // 카드 밖 영역 등 상위로 전파 방지
-
-    // 1. 터미널 포커스 호출 (실제 PID 활용)
-    if (window.electronAPI && window.electronAPI.focusTerminal) {
-      window.electronAPI.focusTerminal(agent.id);
-    }
-
-    // 2. 찌르기 반응 (시각적 피드백)
+    e.stopPropagation();
     if (pokeTimeout) return;
     const originalText = bubble.textContent;
-    const originalBorder = bubble.style.borderColor;
-
     const randomMsg = pokeMessages[Math.floor(Math.random() * pokeMessages.length)];
     bubble.textContent = randomMsg;
     bubble.style.borderColor = '#ff4081';
-
     pokeTimeout = setTimeout(() => {
       bubble.style.borderColor = '';
       pokeTimeout = null;
@@ -508,9 +498,15 @@ function updateGridLayout() {
   const cards = Array.from(agentGrid.querySelectorAll('.agent-card'));
   if (cards.length === 0) {
     agentGrid.classList.remove('has-multiple');
-    if (idleContainer) idleContainer.style.display = 'flex';
-    // Remove all old wrappers
-    while (agentGrid.firstChild) agentGrid.removeChild(agentGrid.firstChild);
+    // 배경 박스만 제거 (idleContainer는 보존)
+    agentGrid.querySelectorAll('.agent-party-bg').forEach(el => el.remove());
+    if (idleContainer) {
+      // idleContainer가 DOM에서 떨어졌으면 다시 붙이기
+      if (!idleContainer.parentNode) {
+        agentGrid.appendChild(idleContainer);
+      }
+      idleContainer.style.display = 'flex';
+    }
     return;
   }
 
@@ -530,10 +526,12 @@ function updateGridLayout() {
 
   mains.sort((a, b) => (a.data.projectPath || '').localeCompare(b.data.projectPath || ''));
 
-  // Clear grid contents nicely (preserve elements but detach them)
-  while (agentGrid.firstChild) {
-    agentGrid.removeChild(agentGrid.firstChild);
-  }
+  // Clear grid contents (agent cards, bg boxes) — idleContainer는 보존
+  Array.from(agentGrid.children).forEach(child => {
+    if (child !== idleContainer) {
+      agentGrid.removeChild(child);
+    }
+  });
 
   let lastProject = null;
   let mainIndex = 0;
@@ -549,18 +547,10 @@ function updateGridLayout() {
     }
     lastProject = proj;
 
-    // 메인 에이전트 넘버링 처리
-    const nameBadge = mainItem.card.querySelector('.agent-name');
+    // 메인 에이전트 넘버링 처리 (type-tag에만 표시, 하단 nameBadge는 중복이므로 건드리지 않음)
     const typeTag = mainItem.card.querySelector('.type-tag');
-
     const label = `Main_${mainIndex}`;
     if (typeTag) typeTag.textContent = label;
-    if (nameBadge) {
-      if (nameBadge.textContent === 'Main' || nameBadge.textContent === 'Agent' || nameBadge.style.display === 'none' || nameBadge.textContent.startsWith('Main_')) {
-        nameBadge.textContent = label;
-        nameBadge.style.display = 'block';
-      }
-    }
     mainIndex++;
 
     const mySubs = [];

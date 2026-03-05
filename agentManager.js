@@ -14,22 +14,15 @@ class AgentManager extends EventEmitter {
     this.agents = new Map();
     this.config = {
       softLimitWarning: 50,  // 소프트 워닝 (차단하지 않음, 로그만)
-      idleTimeout: 10 * 60 * 1000,
-      cleanupInterval: 60 * 1000
     };
-    this.cleanupInterval = null;
   }
 
   start() {
-    this.cleanupInterval = setInterval(() => this.cleanupIdleAgents(), this.config.cleanupInterval);
+    // 에이전트 정리는 main.js liveness checker(PID 기반)가 전담
     console.log('[AgentManager] Started');
   }
 
   stop() {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
     this.agents.clear();
     console.log('[AgentManager] Stopped');
   }
@@ -80,6 +73,15 @@ class AgentManager extends EventEmitter {
       permissionMode: entry.permissionMode !== undefined ? entry.permissionMode : (existingAgent ? existingAgent.permissionMode : null),
       source: entry.source !== undefined ? entry.source : (existingAgent ? existingAgent.source : null),
       agentType: entry.agentType !== undefined ? entry.agentType : (existingAgent ? existingAgent.agentType : null),
+      // 현재 사용 중인 도구
+      currentTool: entry.currentTool !== undefined ? entry.currentTool : (existingAgent ? existingAgent.currentTool : null),
+      // Stop 이벤트의 마지막 응답 메시지
+      lastMessage: entry.lastMessage !== undefined ? entry.lastMessage : (existingAgent ? existingAgent.lastMessage : null),
+      // SessionEnd 종료 사유
+      endReason: entry.endReason !== undefined ? entry.endReason : (existingAgent ? existingAgent.endReason : null),
+      // 팀 정보
+      teammateName: entry.teammateName !== undefined ? entry.teammateName : (existingAgent ? existingAgent.teammateName : null),
+      teamName: entry.teamName !== undefined ? entry.teamName : (existingAgent ? existingAgent.teamName : null),
       // Task 3A-3: 토큰 사용량 (훅에서 누적, 스캐너에서 보완)
       tokenUsage: entry.tokenUsage !== undefined ? entry.tokenUsage : (existingAgent ? existingAgent.tokenUsage : { inputTokens: 0, outputTokens: 0, estimatedCost: 0 }),
       isSubagent: entry.isSubagent || (existingAgent ? existingAgent.isSubagent : false),
@@ -169,21 +171,8 @@ class AgentManager extends EventEmitter {
   getAgentCount() { return this.agents.size; }
   dismissAgent(agentId) { return this.removeAgent(agentId); }
 
-  cleanupIdleAgents() {
-    const now = Date.now();
-    const toRemove = [];
-    for (const [id, agent] of this.agents.entries()) {
-      if (now - agent.lastActivity > this.config.idleTimeout) {
-        toRemove.push(id);
-      }
-    }
-    for (const id of toRemove) {
-      const a = this.agents.get(id);
-      console.log(`[AgentManager] Auto-dismiss: ${a.displayName}`);
-      this.removeAgent(id);
-    }
-    if (toRemove.length > 0) this.emit('agents-cleaned', { count: toRemove.length });
-  }
+  // 에이전트 정리는 main.js liveness checker(PID 기반)가 전담
+  // cleanupIdleAgents 삭제 — 타이머 기반 정리는 PID 체크와 충돌
 
   getAgentsByActivity() {
     return this.getAllAgents().sort((a, b) => b.lastActivity - a.lastActivity);

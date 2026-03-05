@@ -1,7 +1,7 @@
 /**
  * Pixel Agent Desk - Auto Installation Script
  *
- * Claude CLI 설정에 hook.js를 자동 등록합니다.
+ * Claude CLI 설정에 HTTP 훅을 자동 등록합니다.
  * npm install 시 자동으로 실행됩니다.
  */
 
@@ -60,24 +60,13 @@ function writeClaudeConfig(configPath, config) {
 }
 
 /**
- * hook.js 절대 경로 가져오기
- */
-function getHookScriptPath() {
-  // 현재 프로젝트의 hook.js 경로
-  const projectRoot = __dirname;
-  return path.join(projectRoot, 'hook.js').replace(/\\/g, '/');
-}
-
-/**
- * 훅 스크립트 등록
+ * HTTP 훅 등록
  */
 function registerHookScript() {
   const configPath = getClaudeConfigPath();
-  const hookPath = getHookScriptPath();
 
-  console.log('[Install] Claude CLI 훅 스크립트 등록 시작...');
+  console.log('[Install] Claude CLI HTTP 훅 등록 시작...');
   console.log('[Install] 설정 파일 경로:', configPath);
-  console.log('[Install] 훅 스크립트 경로:', hookPath);
 
   // 현재 설정 읽기
   const config = readClaudeConfig(configPath);
@@ -85,7 +74,10 @@ function registerHookScript() {
   // 훅 설정 추가 또는 업데이트
   config.hooks = config.hooks || {};
 
-  // 모든 훅 이벤트에 hook.js 등록
+  // HTTP 훅: Node 프로세스 스폰 없이 Claude가 직접 HTTP POST
+  const HTTP_HOOK_URL = 'http://localhost:47821/hook';
+
+  // 모든 훅 이벤트에 HTTP 훅 등록
   const hookEvents = [
     'SessionStart',
     'SessionEnd',
@@ -103,17 +95,24 @@ function registerHookScript() {
     'ConfigChange',
     'WorktreeCreate',
     'WorktreeRemove',
-    'PreCompact',
-    'InstructionsLoaded'
+    'PreCompact'
   ];
 
   let updated = false;
   for (const event of hookEvents) {
-    if (!config.hooks[event] || config.hooks[event] !== hookPath) {
-      config.hooks[event] = `node "${hookPath}"`;
-      updated = true;
-      console.log(`[Install] ✓ ${event} 훅 등록`);
-    }
+    const expected = [{ matcher: '*', hooks: [{ type: 'http', url: HTTP_HOOK_URL }] }];
+    const current = config.hooks[event];
+    // 이미 HTTP 훅으로 등록된 경우 스킵
+    if (current && JSON.stringify(current) === JSON.stringify(expected)) continue;
+    config.hooks[event] = expected;
+    updated = true;
+    console.log(`[Install] ✓ ${event} HTTP 훅 등록`);
+  }
+
+  // 이전 버전에서 등록되었을 수 있는 유효하지 않은 훅 제거
+  if (config.hooks['InstructionsLoaded']) {
+    delete config.hooks['InstructionsLoaded'];
+    updated = true;
   }
 
   if (updated) {

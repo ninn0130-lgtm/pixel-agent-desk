@@ -19,16 +19,16 @@ describe('AgentManager', () => {
   });
 
   describe('start and stop', () => {
-    test('start initializes cleanup interval', () => {
-      expect(manager.cleanupInterval).not.toBeNull();
+    test('start runs without error', () => {
+      // 에이전트 정리는 main.js liveness checker(PID)가 전담
+      expect(() => manager.start()).not.toThrow();
     });
 
-    test('stop clears interval and agents', () => {
+    test('stop clears agents', () => {
       manager.updateAgent({ sessionId: 'test-1', state: 'Working' });
       expect(manager.getAgentCount()).toBe(1);
 
       manager.stop();
-      expect(manager.cleanupInterval).toBeNull();
       expect(manager.getAgentCount()).toBe(0);
     });
   });
@@ -143,15 +143,20 @@ describe('AgentManager', () => {
       jest.useRealTimers();
     });
 
-    test('respects max agents limit', () => {
-      manager.config.maxAgents = 2;
+    test('soft limit warns but does not block agents', () => {
+      manager.config.softLimitWarning = 2;
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
       manager.updateAgent({ sessionId: 'agent-1', state: 'Working' });
       manager.updateAgent({ sessionId: 'agent-2', state: 'Working' });
       const result = manager.updateAgent({ sessionId: 'agent-3', state: 'Working' });
 
-      expect(result).toBeNull();
-      expect(manager.getAgentCount()).toBe(2);
+      // 소프트 리밋: 등록은 차단하지 않고 경고만 출력
+      expect(result).not.toBeNull();
+      expect(manager.getAgentCount()).toBe(3);
+      expect(warnSpy).toHaveBeenCalled();
+
+      warnSpy.mockRestore();
     });
   });
 
@@ -211,61 +216,8 @@ describe('AgentManager', () => {
     });
   });
 
-  describe('cleanupIdleAgents', () => {
-    beforeEach(() => {
-      jest.useFakeTimers();
-    });
-
-    afterEach(() => {
-      jest.useRealTimers();
-    });
-
-    test('removes agents idle longer than timeout', () => {
-      const entry = {
-        sessionId: 'idle-agent',
-        slug: 'idle',
-        state: 'Done'
-      };
-
-      manager.updateAgent(entry);
-      jest.advanceTimersByTime(11 * 60 * 1000); // 11 minutes > 10 min timeout
-      manager.cleanupIdleAgents();
-
-      const agent = manager.getAgent('idle-agent');
-      expect(agent).toBeNull();
-    });
-
-    test('keeps recent agents', () => {
-      const entry = {
-        sessionId: 'recent-agent',
-        slug: 'recent',
-        state: 'Working'
-      };
-
-      manager.updateAgent(entry);
-
-      // Only advance 5 minutes - less than 10 min timeout
-      jest.advanceTimersByTime(5 * 60 * 1000);
-
-      manager.cleanupIdleAgents();
-
-      const agent = manager.getAgent('recent-agent');
-      expect(agent).not.toBeNull();
-    });
-
-    test('emits agents-cleaned event', (done) => {
-      manager.updateAgent({ sessionId: 'idle-1', state: 'Done' });
-      manager.updateAgent({ sessionId: 'idle-2', state: 'Done' });
-
-      manager.on('agents-cleaned', (data) => {
-        expect(data.count).toBe(2);
-        done();
-      });
-
-      jest.advanceTimersByTime(11 * 60 * 1000);
-      manager.cleanupIdleAgents();
-    });
-  });
+  // cleanupIdleAgents 삭제됨 — 에이전트 정리는 main.js liveness checker(PID 기반)가 전담
+  // 타이머 기반 정리는 PID가 살아있는 에이전트를 잘못 죽이므로 제거
 
   describe('getAgentWithEffectiveState', () => {
     test('returns agent with effective state for parent with working children', () => {

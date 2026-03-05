@@ -12,6 +12,7 @@ const { getWindowSizeForAgents, checkSessionActive } = require('./utils');
 // =====================================================
 // Claude CLI 훅 자동 등록
 // =====================================================
+const HOOK_SERVER_PORT = 47821;
 
 /**
  * Claude CLI 설정 파일 경로 가져오기
@@ -67,17 +68,22 @@ function getHookScriptPath() {
  */
 function isHookRegistered() {
   const config = readClaudeConfig();
-  const hookPath = getHookScriptPath();
+  const HTTP_HOOK_URL = `http://localhost:${HOOK_SERVER_PORT}/hook`;
 
   if (!config.hooks) {
     return false;
   }
 
-  // 적어도 하나의 훅 이벤트가 우리 훅을 가리키는지 확인
+  // HTTP 훅이 올바르게 등록되어 있는지 확인
   const hookEvents = ['SessionStart', 'PreToolUse', 'PostToolUse'];
   for (const event of hookEvents) {
-    if (config.hooks[event] && config.hooks[event].includes(hookPath)) {
-      return true;
+    if (config.hooks[event]) {
+      if (!Array.isArray(config.hooks[event])) return false;
+      const hookStr = JSON.stringify(config.hooks[event]);
+      // HTTP 훅 URL이 포함되어 있고, type이 http인지 확인
+      if (hookStr.includes(HTTP_HOOK_URL) && hookStr.includes('"type":"http"')) {
+        return true;
+      }
     }
   }
 
@@ -102,18 +108,34 @@ function registerClaudeHooks() {
 
   config.hooks = config.hooks || {};
 
-  // 모든 훅 이벤트 등록
+  // HTTP 훅: Node 프로세스 스폰 없이 Claude가 직접 HTTP POST
+  const HTTP_HOOK_URL = `http://localhost:${HOOK_SERVER_PORT}/hook`;
   const hookEvents = [
     'SessionStart', 'SessionEnd', 'UserPromptSubmit',
     'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
     'Stop', 'TaskCompleted', 'PermissionRequest', 'Notification',
     'SubagentStart', 'SubagentStop', 'TeammateIdle',
     'ConfigChange', 'WorktreeCreate', 'WorktreeRemove',
-    'PreCompact', 'InstructionsLoaded'
+    'PreCompact'
   ];
 
   for (const event of hookEvents) {
-    config.hooks[event] = `node "${hookPath}"`;
+    config.hooks[event] = [
+      {
+        matcher: "*",
+        hooks: [
+          {
+            type: "http",
+            url: HTTP_HOOK_URL
+          }
+        ]
+      }
+    ];
+  }
+
+  // 이전 버전에서 등록되었을 수 있는 유효하지 않은 훅 제거
+  if (config.hooks['InstructionsLoaded']) {
+    delete config.hooks['InstructionsLoaded'];
   }
 
   if (writeClaudeConfig(config)) {
@@ -139,35 +161,18 @@ function startDashboardServer() {
   debugLog('[Dashboard] 서버 시작 중...');
 
   try {
-    const server = require('./dashboard-server');
+    const serverModule = require('./dashboard-server.js');
 
     // AgentManager와 SessionScanner 연결
     if (agentManager) {
-      server.setAgentManager(agentManager);
+      serverModule.setAgentManager(agentManager);
     }
     if (sessionScanner) {
-      server.setSessionScanner(sessionScanner);
+      serverModule.setSessionScanner(sessionScanner);
     }
 
     // 서버 시작
-    const httpServer = server.startServer();
-    dashboardServer = httpServer;
-
-    debugLog('[Dashboard] ✅ 서버 시작 완료 (port 3000)');
-    console.log('\n✅ 대시보드 서버가 시작되었습니다.');
-    console.log('📊 http://localhost:3000 에서 접속 가능합니다.\n');
-
-    // AgentManager와 SessionScanner 연결
-    if (agentManager) {
-      dashboardServer.setAgentManager(agentManager);
-    }
-    if (sessionScanner) {
-      dashboardServer.setSessionScanner(sessionScanner);
-    }
-
-    // 서버 시작
-    const server = dashboardServer.startServer();
-    dashboardServerProcess = server;
+    dashboardServer = serverModule.startServer();
 
     debugLog('[Dashboard] ✅ 서버 시작 완료 (port 3000)');
     console.log('\n✅ 대시보드 서버가 시작되었습니다.');
@@ -298,6 +303,7 @@ function createWindow() {
     y: Math.round((height - winSize.height) / 2),
     transparent: true,
     frame: false,
+    hasShadow: false,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -380,7 +386,7 @@ function createDashboardWindow() {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: false,
-        preload: path.join(__dirname, 'missionControlPreload.js')
+        preload: path.join(__dirname, 'dashboardPreload.js')
       }
     });
 
@@ -394,7 +400,7 @@ function createDashboardWindow() {
       // Send initial agent data
       if (agentManager) {
         const agents = agentManager.getAllAgents();
-        const adaptedAgents = agents.map(agent => adaptAgentToMissionControl(agent));
+        const adaptedAgents = agents.map(agent => adaptAgentToDashboard(agent));
         debugLog(`[MissionControl] Sending ${adaptedAgents.length} agents to dashboard`);
         dashboardWindow.webContents.send('dashboard-initial-data', adaptedAgents);
       }
@@ -452,78 +458,6 @@ app.commandLine.appendSwitch('disable-software-rasterizer');
 // =====================================================
 // Claude CLI 훅 자동 등록 & 프로세스 PID 모니터링
 // =====================================================
-const HOOK_SERVER_PORT = 47821;
-
-function setupClaudeHooks() {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  try {
-    let settings = {};
-    if (fs.existsSync(settingsPath)) {
-      try {
-        const rawContent = fs.readFileSync(settingsPath, 'utf8').replace(/^\uFEFF/, '');
-        settings = JSON.parse(rawContent);
-      } catch (parseErr) {
-        debugLog(`[Main] settings.json parse error: ${parseErr.message}. Backing up.`);
-        try {
-          fs.copyFileSync(settingsPath, settingsPath + '.corrupt_backup');
-        } catch (e) {
-          errorHandler.capture(e, {
-            code: 'E002',
-            category: 'FILE_IO',
-            severity: 'ERROR'
-          });
-        }
-        settings = {};
-      }
-    }
-    if (!settings.hooks) settings.hooks = {};
-
-    const hookScript = path.join(__dirname, 'hook.js').replace(/\\/g, '/');
-    const hookCmd = `node "${hookScript}"`;
-
-    // command 훅으로 모든 이벤트를 hook.js로 전달 (공식 가이드 기준 전체 확장)
-    const HOOK_EVENTS = [
-      'SessionStart', 'SessionEnd',
-      'UserPromptSubmit',           // 사용자 메시지 제출 → Working
-      'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
-      'Stop',                       // Claude 응답 완료 → Done
-      'TaskCompleted',
-      'PermissionRequest', 'Notification',
-      'SubagentStart', 'SubagentStop',
-      'TeammateIdle',               // 에이전트 팀 멤버 대기 중 → Waiting
-      'ConfigChange', 'WorktreeCreate', 'WorktreeRemove', 'PreCompact' // 기타 이벤트
-    ];
-
-    for (const eventName of HOOK_EVENTS) {
-      let hooks = settings.hooks[eventName] || [];
-      // 기존 hook.js 훅 제거 (중복 방지)
-      hooks = hooks.filter(c => !c.hooks?.some(h => h.type === 'command' && h.command?.includes('hook.js')));
-      // 기존 http 훅도 제거 (Claude CLI가 http 훅을 보내지 않으므로)
-      hooks = hooks.filter(c => !c.hooks?.some(h => h.type === 'http' && h.url?.includes(`:${HOOK_SERVER_PORT}`)));
-      hooks.push({ matcher: "*", hooks: [{ type: "command", command: hookCmd }] });
-      settings.hooks[eventName] = hooks;
-    }
-
-    // SessionEnd 추가: JSONL 직접 기록 보험 (강제 종료 직전 sessionend_hook.js 실행)
-    const endScript = path.join(__dirname, 'sessionend_hook.js').replace(/\\/g, '/');
-    let endHooks = settings.hooks['SessionEnd'] || [];
-    endHooks = endHooks.filter(c => !c.hooks?.some(h => h.type === 'command' && h.command?.includes('sessionend_hook')));
-    endHooks.push({ matcher: "*", hooks: [{ type: "command", command: `node "${endScript}"` }] });
-    settings.hooks['SessionEnd'] = endHooks;
-
-    const tmpPath = settingsPath + '.tmp';
-    fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 4), 'utf-8');
-    fs.renameSync(tmpPath, settingsPath);
-    debugLog(`[Main] Registered all hooks via hook.js`);
-  } catch (e) {
-    errorHandler.capture(e, {
-      code: 'E006',
-      category: 'HOOK_SERVER',
-      severity: 'ERROR'
-    });
-    debugLog(`[Main] Failed to setup hooks: ${e.message}`);
-  }
-}
 
 // =====================================================
 // HTTP 훅 서버 — Claude CLI가 SessionStart/End를 POST로 알려줌
@@ -533,26 +467,8 @@ const pendingSessionStarts = [];
 // 세션별 첫 PreToolUse 여부 추적 (초기화 탐색 무시용)
 const firstPreToolUseDone = new Map(); // sessionId → boolean
 // PostToolUse 이후 Done 전환용 타이머 (TaskCompleted 훅이 안 오는 경우 대비)
-const postToolIdleTimers = new Map(); // sessionId → timer
-const POST_TOOL_IDLE_MS = 2500; // PostToolUse 후 2.5초 내 추가 훅 없으면 Done
+// PostToolUse idle 타이머 삭제됨 — Stop 훅이 도구 체이닝 이후에만 발생하므로 불필요
 
-function scheduleIdleDone(sessionId) {
-  // 이미 예약된 타이머 취소
-  const prev = postToolIdleTimers.get(sessionId);
-  if (prev) clearTimeout(prev);
-
-  const timer = setTimeout(() => {
-    postToolIdleTimers.delete(sessionId);
-    if (!agentManager) return;
-    const agent = agentManager.getAgent(sessionId);
-    if (agent && agent.state === 'Working') {
-      debugLog(`[Hook] Idle timeout → Done (from Working): ${sessionId.slice(0, 8)}`);
-      agentManager.updateAgent({ ...agent, sessionId, state: 'Done' }, 'hook');
-    }
-  }, POST_TOOL_IDLE_MS);
-
-  postToolIdleTimers.set(sessionId, timer);
-}
 
 function processHookEvent(data) {
   const event = data.hook_event_name;
@@ -561,69 +477,96 @@ function processHookEvent(data) {
 
   debugLog(`[Hook] ${event} session=${sessionId.slice(0, 8)}`);
 
-  switch (event) {
-    case 'SessionStart':
-      handleSessionStart(sessionId, data.cwd || '', data._pid || 0, false, false, 'Waiting', null, {
+  // SessionStart가 누락되어도 첫 이벤트에서 즉시 에이전트 생성 (범용 fallback)
+  if (agentManager && event !== 'SessionStart' && event !== 'SessionEnd') {
+    const existing = agentManager.getAgent(sessionId);
+    if (!existing) {
+      debugLog(`[Hook] Auto-create from ${event}: ${sessionId.slice(0, 8)}`);
+      handleSessionStart(sessionId, data.cwd || '', 0, false, false, 'Waiting', null, {
         jsonlPath: data.transcript_path || null,
         model: data.model || null,
         permissionMode: data.permission_mode || null,
-        source: data.source || null,
-        agentType: data.agent_type || null,
       });
+    }
+  }
+
+  switch (event) {
+    case 'SessionStart': {
+      const sessionSource = data.source || 'startup';
+      const sessionMeta = {
+        jsonlPath: data.transcript_path || null,
+        model: data.model || null,
+        permissionMode: data.permission_mode || null,
+        source: sessionSource,
+        agentType: data.agent_type || null,
+      };
+
+      // compact/resume/clear: 기존 에이전트가 있으면 업데이트만 (중복 생성 방지)
+      if (sessionSource !== 'startup' && agentManager) {
+        const existing = agentManager.getAgent(sessionId);
+        if (existing) {
+          agentManager.updateAgent({
+            ...existing, sessionId, state: 'Waiting',
+            jsonlPath: sessionMeta.jsonlPath || existing.jsonlPath,
+            model: sessionMeta.model || existing.model,
+            source: sessionSource,
+          }, 'hook');
+          debugLog(`[Hook] SessionStart (${sessionSource}) → updated existing agent ${sessionId.slice(0, 8)}`);
+          break;
+        }
+      }
+
+      handleSessionStart(sessionId, data.cwd || '', data._pid || 0, false, false, 'Waiting', null, sessionMeta);
       break;
+    }
 
     case 'SessionEnd':
+      // reason 필드 로깅 (종료 사유 추적)
+      if (data.reason) {
+        debugLog(`[Hook] SessionEnd reason: ${data.reason} for ${sessionId.slice(0, 8)}`);
+      }
       handleSessionEnd(sessionId);
       break;
 
     case 'UserPromptSubmit':
-      // 사용자가 메시지 제출 → Working (도구 없는 순수 대화도 포함)
-      { const t = postToolIdleTimers.get(sessionId); if (t) clearTimeout(t); postToolIdleTimers.delete(sessionId); }
+      // 사용자가 메시지 제출 → Thinking (범용 fallback이 이미 에이전트 생성 보장)
       firstPreToolUseDone.delete(sessionId);
       if (agentManager) {
         const agent = agentManager.getAgent(sessionId);
         if (agent) {
           agentManager.updateAgent({ ...agent, sessionId, state: 'Thinking' }, 'hook');
-        } else {
-          // 복구에 실패했거나 30분 지나서 삭제된 경우, 다시 훅이 오면 새 세션으로 생성
-          debugLog(`[Hook] auto-creating agent for existing session: ${sessionId.slice(0, 8)}`);
-          handleSessionStart(sessionId, data.cwd || '');
-          // 생성 직후 상태 업데이트를 위해 다시 가져옴
-          setTimeout(() => {
-            const newAgent = agentManager.getAgent(sessionId);
-            if (newAgent) agentManager.updateAgent({ ...newAgent, state: 'Thinking' }, 'hook');
-          }, 100);
         }
       }
       break;
 
     case 'Stop':
-    case 'TaskCompleted':
-      // Claude 응답 완료 → Done (타이머도 취소)
-      { const t = postToolIdleTimers.get(sessionId); if (t) clearTimeout(t); postToolIdleTimers.delete(sessionId); }
+    case 'TaskCompleted': {
+      // Claude 응답 완료 → 즉시 Done (도구 체이닝 중에는 Stop이 오지 않음)
+
       firstPreToolUseDone.delete(sessionId);
+      if (event === 'TaskCompleted' && data.task_id) {
+        debugLog(`[Hook] TaskCompleted: task=${data.task_id} subject="${data.task_subject || ''}" by ${data.teammate_name || sessionId.slice(0, 8)}`);
+      }
       if (agentManager) {
         const agent = agentManager.getAgent(sessionId);
+        const lastMsg = data.last_assistant_message || null;
         if (agent) {
-          agentManager.updateAgent({ ...agent, sessionId, state: 'Done' }, 'hook');
-        } else {
-          handleSessionStart(sessionId, data.cwd || '');
+          agentManager.updateAgent({ ...agent, sessionId, state: 'Done', currentTool: null, lastMessage: lastMsg }, 'hook');
         }
       }
       break;
+    }
 
     case 'PreToolUse': {
-      // idle 타이머 취소
-      const prev = postToolIdleTimers.get(sessionId);
-      if (prev) clearTimeout(prev);
-      postToolIdleTimers.delete(sessionId);
-      // 첫 PreToolUse: 세션 초기화 탐색 → 무시 (UserPromptSubmit 못 왜을 때 보험)
+      // 첫 PreToolUse: 세션 초기화 탐색 → 무시
       if (!firstPreToolUseDone.has(sessionId)) {
         firstPreToolUseDone.set(sessionId, true);
         debugLog(`[Hook] PreToolUse ignored (first = session init)`);
       } else if (agentManager) {
         const agent = agentManager.getAgent(sessionId);
-        if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Working' }, 'hook');
+        if (agent) {
+          agentManager.updateAgent({ ...agent, sessionId, state: 'Working', currentTool: data.tool_name || null }, 'hook');
+        }
       }
       break;
     }
@@ -642,52 +585,119 @@ function processHookEvent(data) {
               'claude-opus-4-5': { input: 15 / 1_000_000, output: 75 / 1_000_000 },
               'claude-sonnet-4-5': { input: 3 / 1_000_000, output: 15 / 1_000_000 },
               'claude-haiku-4-5': { input: 0.8 / 1_000_000, output: 4 / 1_000_000 },
+              'claude-opus-4-6': { input: 15 / 1_000_000, output: 75 / 1_000_000 },
+              'claude-sonnet-4-6': { input: 3 / 1_000_000, output: 15 / 1_000_000 },
+              'claude-haiku-4-6': { input: 0.8 / 1_000_000, output: 4 / 1_000_000 },
             };
             const DEFAULT_PRICING = { input: 3 / 1_000_000, output: 15 / 1_000_000 };
             const pricing = MODEL_PRICING[agent.model] || DEFAULT_PRICING;
             const estimatedCost = inputTokens * pricing.input + outputTokens * pricing.output;
             agentManager.updateAgent({
-              ...agent, sessionId, state: 'Thinking',
+              ...agent, sessionId, state: 'Thinking', currentTool: null,
               tokenUsage: { inputTokens, outputTokens, estimatedCost: Math.round(estimatedCost * 10000) / 10000 }
             }, 'hook');
           } else {
-            agentManager.updateAgent({ ...agent, sessionId, state: 'Thinking' }, 'hook');
+            agentManager.updateAgent({ ...agent, sessionId, state: 'Thinking', currentTool: null }, 'hook');
           }
         }
       }
-      scheduleIdleDone(sessionId);
       break;
     }
 
     case 'PostToolUseFailure':
-    case 'Notification':
-    case 'PermissionRequest':
-      // 도구 실패 / 알림 / 권한 요청 → Help
-      { const t = postToolIdleTimers.get(sessionId); if (t) clearTimeout(t); postToolIdleTimers.delete(sessionId); }
+      // 도구 실패 → Help (에러 정보 포함)
+
       if (agentManager) {
         const agent = agentManager.getAgent(sessionId);
-        if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Help' }, 'hook');
+        if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Help', currentTool: data.tool_name || null }, 'hook');
       }
       break;
 
+    case 'PermissionRequest':
+      // 권한 요청 → Help
+
+      if (agentManager) {
+        const agent = agentManager.getAgent(sessionId);
+        if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Help', currentTool: data.tool_name || null }, 'hook');
+      }
+      break;
+
+    case 'Notification': {
+      // notification_type에 따라 상태 구분
+      const notifType = data.notification_type;
+      let notifState = 'Waiting'; // 기본: 일반 알림은 대기 상태 유지
+      if (notifType === 'permission_prompt' || notifType === 'elicitation_dialog') {
+        notifState = 'Help'; // 사용자 개입 필요
+      }
+
+      if (agentManager) {
+        const agent = agentManager.getAgent(sessionId);
+        if (agent) agentManager.updateAgent({ ...agent, sessionId, state: notifState }, 'hook');
+      }
+      break;
+    }
+
     case 'SubagentStart': {
-      const subId = data.subagent_session_id || data.agent_id;
-      if (subId) handleSessionStart(subId, data.cwd || '', 0, false, true, 'Working', sessionId);
+      // agent_id가 공식 필드, subagent_session_id는 폴백
+      const subId = data.agent_id || data.subagent_session_id;
+      if (subId) {
+        handleSessionStart(subId, data.cwd || '', 0, false, true, 'Working', sessionId, {
+          jsonlPath: data.agent_transcript_path || data.transcript_path || null,
+          agentType: data.agent_type || null,
+        });
+        debugLog(`[Hook] SubagentStart: ${subId.slice(0, 8)} type=${data.agent_type || 'unknown'} parent=${sessionId.slice(0, 8)}`);
+      }
       break;
     }
 
     case 'SubagentStop': {
-      const subId = data.subagent_session_id || data.agent_id;
-      if (subId) handleSessionEnd(subId);
+      const subId = data.agent_id || data.subagent_session_id;
+      if (subId) {
+        // last_assistant_message 저장 후 제거
+        if (data.last_assistant_message && agentManager) {
+          const subAgent = agentManager.getAgent(subId);
+          if (subAgent) {
+            agentManager.updateAgent({ ...subAgent, lastMessage: data.last_assistant_message, state: 'Done' }, 'hook');
+          }
+        }
+        handleSessionEnd(subId);
+      }
       break;
     }
 
     case 'TeammateIdle': {
       // 에이전트 팀 멤버가 작업을 멈추고 기다리는 중 -> Waiting
+      const teammateName = data.teammate_name || null;
+      const teamName = data.team_name || null;
       if (agentManager) {
         const agent = agentManager.getAgent(sessionId);
-        if (agent) agentManager.updateAgent({ ...agent, state: 'Waiting', isTeammate: true }, 'hook');
-        else handleSessionStart(sessionId, data.cwd || '', 0, true); // 신규 팀원 감지 시
+        if (agent) {
+          agentManager.updateAgent({
+            ...agent, state: 'Waiting', isTeammate: true,
+            teammateName, teamName, currentTool: null
+          }, 'hook');
+        } else {
+          // 신규 팀원 감지 시
+          handleSessionStart(sessionId, data.cwd || '', 0, true, false, 'Waiting', null, {
+            jsonlPath: data.transcript_path || null,
+            teammateName, teamName,
+          });
+        }
+      }
+      debugLog(`[Hook] TeammateIdle: ${sessionId.slice(0, 8)} name=${teammateName} team=${teamName}`);
+      break;
+    }
+
+    case 'PreCompact': {
+      // 컨텍스트 압축 감지 — trigger: "manual" | "auto"
+      const trigger = data.trigger || 'unknown';
+      debugLog(`[Hook] PreCompact (${trigger}) for ${sessionId.slice(0, 8)}`);
+      // auto compact는 컨텍스트 윈도우가 꽉 찼다는 신호
+      if (agentManager) {
+        const agent = agentManager.getAgent(sessionId);
+        if (agent) {
+          agentManager.updateAgent({ ...agent, sessionId, state: 'Thinking' }, 'hook');
+        }
       }
       break;
     }
@@ -695,7 +705,6 @@ function processHookEvent(data) {
     case 'ConfigChange':
     case 'WorktreeCreate':
     case 'WorktreeRemove':
-    case 'PreCompact':
       debugLog(`[Hook] Meta info: ${event} for ${sessionId.slice(0, 8)}`);
       break;
 
@@ -734,6 +743,15 @@ function startHookServer() {
       model: { type: 'string' },  // ★ 사용 모델
       agent_type: { type: 'string' },  // ★ --agent 타입
       agent_id: { type: 'string' },
+      notification_type: { type: 'string' },  // ★ Notification: permission_prompt/idle_prompt/auth_success/elicitation_dialog
+      last_assistant_message: { type: 'string' },  // ★ Stop/SubagentStop: 마지막 응답 메시지
+      reason: { type: 'string' },  // ★ SessionEnd: 종료 사유
+      teammate_name: { type: 'string' },  // ★ TeammateIdle/TaskCompleted: 팀원 이름
+      team_name: { type: 'string' },  // ★ TeammateIdle/TaskCompleted: 팀 이름
+      task_id: { type: 'string' },  // ★ TaskCompleted: 작업 ID
+      task_subject: { type: 'string' },  // ★ TaskCompleted: 작업 제목
+      trigger: { type: 'string' },  // ★ PreCompact: manual/auto
+      agent_transcript_path: { type: 'string' },  // ★ SubagentStop: 서브에이전트 트랜스크립트
       _pid: { type: 'number' },
       _timestamp: { type: 'number' }
     },
@@ -756,6 +774,7 @@ function startHookServer() {
 
       try {
         const data = JSON.parse(body);
+        debugLog(`[Hook] ← ${data.hook_event_name || '?'} session=${(data.session_id || '').slice(0, 8) || '?'}`);
 
         // P1-3: Validate JSON schema
         const isValid = validateHook(data);
@@ -766,14 +785,14 @@ function startHookServer() {
             severity: 'WARNING',
             details: validateHook.errors
           });
-          debugLog(`[Hook] Validation error: ${JSON.stringify(validateHook.errors)}`);
+          debugLog(`[Hook] Validation FAILED for ${data.hook_event_name}: ${JSON.stringify(validateHook.errors)}`);
           return;
         }
 
         processHookEvent(data);
       } catch (e) {
         errorHandler.capture(e, {
-          code: 'E002',
+          code: 'E010',
           category: 'PARSE',
           severity: 'WARNING'
         });
@@ -827,6 +846,7 @@ function recoverExistingSessions() {
     for (const agent of savedAgents) {
       const pid = savedPids.get(agent.id);
 
+      // 1단계: 기본 PID 존재 확인
       let isAlive = false;
       if (pid) {
         try {
@@ -837,26 +857,31 @@ function recoverExistingSessions() {
         }
       }
 
-      if (isAlive) {
-        sessionPids.set(agent.id, pid);
-        firstPreToolUseDone.set(agent.id, true);
-
-        agentManager.updateAgent({
-          sessionId: agent.id,
-          projectPath: agent.projectPath,
-          displayName: agent.displayName,
-          state: agent.state,
-          jsonlPath: agent.jsonlPath,
-          isTeammate: agent.isTeammate,
-          isSubagent: agent.isSubagent,
-          parentId: agent.parentId
-        }, 'recover');
-
-        recoveredCount++;
-        debugLog(`[Recover] Restored: ${agent.id.slice(0, 8)} (${agent.displayName}) state=${agent.state} sub=${agent.isSubagent} pid=${pid}`);
-      } else {
-        debugLog(`[Recover] Skipped dead agent: ${agent.id.slice(0, 8)}`);
+      if (!isAlive) {
+        debugLog(`[Recover] Skipped dead agent (pid gone): ${agent.id.slice(0, 8)}`);
+        continue;
       }
+
+      // 2단계: PID 재사용 방지 — transcript_path가 있으면 그 파일이 실제 열려있는지 확인
+      // (비동기이므로 일단 복구 후 liveness checker가 2초 내 재검증)
+      // Windows에서는 process.kill(pid, 0)만으로는 PID 재사용 문제 해결 불가
+      // → transcript_path 기반 재검증을 liveness checker에 위임
+      sessionPids.set(agent.id, pid);
+      firstPreToolUseDone.set(agent.id, true);
+
+      agentManager.updateAgent({
+        sessionId: agent.id,
+        projectPath: agent.projectPath,
+        displayName: agent.displayName,
+        state: agent.state,
+        jsonlPath: agent.jsonlPath,
+        isTeammate: agent.isTeammate,
+        isSubagent: agent.isSubagent,
+        parentId: agent.parentId
+      }, 'recover');
+
+      recoveredCount++;
+      debugLog(`[Recover] Restored: ${agent.id.slice(0, 8)} (${agent.displayName}) state=${agent.state} pid=${pid} (will re-verify via liveness)`);
     }
 
     debugLog(`[Recover] Done — ${recoveredCount} session(s) restored from state.json`);
@@ -869,32 +894,21 @@ function recoverExistingSessions() {
     debugLog(`[Recover] Error reading or parsing state.json: ${e.message}`);
   }
 
-  // 2. 앱 종료 중 / 비활성화 중 기록된 훅 내역(오프라인 로그)을 순서대로 리플레이
+  // hooks.jsonl 리플레이는 더 이상 불필요 (HTTP 훅 전환으로 hook.js가 기록하지 않음)
+  // 이전 버전에서 남은 hooks.jsonl 파일 정리
   const hooksPath = path.join(os.homedir(), '.pixel-agent-desk', 'hooks.jsonl');
   if (fs.existsSync(hooksPath)) {
     try {
-      debugLog(`[Recover] Replaying offline hooks from hooks.jsonl...`);
-      const lines = fs.readFileSync(hooksPath, 'utf-8').split('\n');
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const data = JSON.parse(line);
-          processHookEvent(data);
-        } catch (e) { }
-      }
-
-      // 리플레이가 끝났으므로 파일 비우기
       fs.writeFileSync(hooksPath, '');
-      debugLog(`[Recover] Finished replaying hooks.jsonl and cleared it.`);
-    } catch (e) {
-      errorHandler.capture(e, {
-        code: 'E007',
-        category: 'FILE_IO',
-        severity: 'WARNING'
-      });
-      debugLog(`[Recover] Error replaying hooks.jsonl: ${e.message}`);
-    }
+      debugLog('[Recover] Cleared legacy hooks.jsonl');
+    } catch (e) { }
   }
+
+  // 복구된 에이전트 state.json 초기화 (재시작 시 이전 상태가 누적되지 않도록)
+  try {
+    fs.writeFileSync(statePath, JSON.stringify({ agents: [], pids: [] }, null, 2), 'utf-8');
+    debugLog('[Recover] state.json reset after recovery');
+  } catch (e) { }
 }
 
 // =====================================================
@@ -914,138 +928,185 @@ async function checkLivenessTier1(agentId, pid) {
   }
 }
 
+// Tier 2/3/Recovery 삭제 — transcript 기반 즉시 판정으로 대체
+
 /**
- * Tier 2: Process responsiveness check via PowerShell
+ * transcript_path로 해당 세션의 Claude PID를 정확히 찾는 함수
+ * Linux/macOS: lsof -t <path> → 파일을 열고 있는 프로세스 PID
+ * Windows: Get-CimInstance로 claude 프로세스 목록 (transcript 기반 매칭 불가)
+ * @param {string|null} jsonlPath - transcript_path
+ * @param {(pid: number|null) => void} callback
  */
-async function checkLivenessTier2(agentId, pid) {
-  try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', [
-      '-NoProfile',
-      '-Command',
-      `$proc = Get-Process -Id ${pid} -ErrorAction SilentlyContinue;
-       if ($proc -and $proc.Responding) { 'true' } else { 'false' }`
-    ], { encoding: 'utf8', timeout: 5000 });
-    return result.stdout.trim() === 'true';
-  } catch (e) {
-    return false;
+function detectClaudePidByTranscript(jsonlPath, callback) {
+  const { execFile } = require('child_process');
+
+  if (!jsonlPath) {
+    detectClaudePidsFallback(callback);
+    return;
+  }
+
+  const resolved = jsonlPath.startsWith('~')
+    ? path.join(os.homedir(), jsonlPath.slice(1))
+    : jsonlPath;
+
+  if (process.platform === 'win32') {
+    // Windows: Restart Manager API로 transcript 파일을 잠근 프로세스 PID 정확 탐지
+    const psScript = `
+$f = '${resolved.replace(/\\/g, '\\\\').replace(/'/g, "''")}'
+if (-not (Test-Path $f)) { exit }
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Runtime.InteropServices.ComTypes;
+public static class RM {
+  [StructLayout(LayoutKind.Sequential)] public struct UP { public uint pid; public FILETIME st; }
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct PI {
+    public UP Process; [MarshalAs(UnmanagedType.ByValTStr,SizeConst=256)] public string App;
+    [MarshalAs(UnmanagedType.ByValTStr,SizeConst=64)] public string Svc;
+    public uint AT; public uint AS; public uint TS; [MarshalAs(UnmanagedType.Bool)] public bool R;
+  }
+  [DllImport("rstrtmgr.dll",CharSet=CharSet.Unicode)] public static extern int RmStartSession(out uint h,int f,string k);
+  [DllImport("rstrtmgr.dll")] public static extern int RmEndSession(uint h);
+  [DllImport("rstrtmgr.dll",CharSet=CharSet.Unicode)] public static extern int RmRegisterResources(uint h,uint nF,string[] fs,uint nA,IntPtr a,uint nS,IntPtr s);
+  [DllImport("rstrtmgr.dll")] public static extern int RmGetList(uint h,out uint need,ref uint cnt,[In,Out] PI[] info,out uint reasons);
+}
+'@ -ErrorAction SilentlyContinue
+$h=[uint32]0; [void][RM]::RmStartSession([ref]$h,0,[Guid]::NewGuid().ToString())
+[void][RM]::RmRegisterResources($h,1,@($f),0,[IntPtr]::Zero,0,[IntPtr]::Zero)
+$n=[uint32]0; $c=[uint32]0; $r=[uint32]0
+[void][RM]::RmGetList($h,[ref]$n,[ref]$c,$null,[ref]$r)
+if($n -gt 0){ $c=$n; $i=New-Object RM+PI[] $c; [void][RM]::RmGetList($h,[ref]$n,[ref]$c,$i,[ref]$r); $i|ForEach-Object{$_.Process.pid} }
+[void][RM]::RmEndSession($h)
+`;
+    execFile('powershell.exe', ['-NoProfile', '-Command', psScript], { timeout: 5000 }, (err, stdout) => {
+      if (!err && stdout) {
+        const pids = stdout.trim().split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
+        if (pids.length > 0) {
+          debugLog(`[PID] Windows RM: transcript ${path.basename(resolved)} → pid=${pids[0]}`);
+          return callback(pids[0]);
+        }
+      }
+      // Restart Manager 실패 시 기존 폴백
+      detectClaudePidsFallback(callback);
+    });
+  } else {
+    // Linux/macOS: lsof로 파일 핸들 기반 탐지
+    execFile('lsof', ['-t', resolved], { timeout: 3000 }, (err, stdout) => {
+      if (!err && stdout) {
+        const pids = stdout.trim().split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
+        if (pids.length > 0) {
+          return callback(pids[0]);
+        }
+      }
+      detectClaudePidsFallback(callback);
+    });
   }
 }
 
 /**
- * Tier 3: Session activity check via JSONL and process tree
+ * 폴백: 프로세스 이름/커맨드라인으로 Claude PID 탐지 (다중 세션 시 부정확할 수 있음)
  */
-async function checkLivenessTier3(agentId, pid) {
-  return await checkSessionActive(agentId, pid);
+function detectClaudePidsFallback(callback) {
+  const { execFile } = require('child_process');
+  if (process.platform === 'win32') {
+    const psCmd = `Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude*' -and ($_.Name -eq 'node.exe' -or $_.Name -eq 'claude.exe') } | Select-Object -ExpandProperty ProcessId`;
+    execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 6000 }, (err, stdout) => {
+      if (err || !stdout) return callback(null);
+      const pids = stdout.trim().split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
+      callback(pids.length > 0 ? pids : null);
+    });
+  } else {
+    execFile('pgrep', ['-f', 'claude'], { timeout: 3000 }, (err, stdout) => {
+      if (err || !stdout) return callback(null);
+      const pids = stdout.trim().split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
+      callback(pids.length > 0 ? pids : null);
+    });
+  }
 }
 
-/**
- * Attempt to recover a ghost agent by checking if session is still active
- */
-async function attemptAgentRecovery(agentId, pid) {
-  try {
-    debugLog(`[Live-Tier3] Attempting recovery for ${agentId.slice(0, 8)}...`);
+// PID 미등록 에이전트 재탐지 (중복 실행 방지)
+const _pidRetryRunning = new Set();
+function retryPidDetection(sessionId) {
+  if (_pidRetryRunning.has(sessionId) || sessionPids.has(sessionId)) return;
+  _pidRetryRunning.add(sessionId);
 
-    const isActive = await checkLivenessTier3(agentId, pid);
-    if (isActive) {
-      const agent = agentManager.getAgent(agentId);
-      if (agent) {
-        // Agent is alive but was marked as ghost - recover it
-        agentManager.updateAgent({ ...agent, state: 'Waiting' }, 'live-recreate');
-        debugLog(`[Live-Tier3] ✓ Recovery successful for ${agentId.slice(0, 8)}`);
-        return true;
+  // transcript_path가 있으면 정확한 1:1 매칭, 없으면 폴백
+  const agent = agentManager ? agentManager.getAgent(sessionId) : null;
+  const jsonlPath = agent ? agent.jsonlPath : null;
+
+  detectClaudePidByTranscript(jsonlPath, (result) => {
+    _pidRetryRunning.delete(sessionId);
+    if (!result) return;
+
+    // 단일 PID(lsof) 또는 PID 배열(폴백)
+    if (typeof result === 'number') {
+      sessionPids.set(sessionId, result);
+      debugLog(`[Live] PID assigned via transcript: ${sessionId.slice(0, 8)} → pid=${result}`);
+    } else if (Array.isArray(result)) {
+      const registeredPids = new Set(sessionPids.values());
+      const newPid = result.find(p => !registeredPids.has(p));
+      if (newPid) {
+        sessionPids.set(sessionId, newPid);
+        debugLog(`[Live] PID assigned via fallback: ${sessionId.slice(0, 8)} → pid=${newPid}`);
       }
     }
-    return false;
-  } catch (e) {
-    debugLog(`[Live-Tier3] Recovery failed for ${agentId.slice(0, 8)}: ${e.message}`);
-    return false;
-  }
+  });
 }
 
 function startLivenessChecker() {
-  const INTERVAL = 3000;   // 3초
-  const GRACE_MS = 15000;  // 등록 후 15초는 스킵 (WMI 조회 완료 전 유예)
-  const MAX_MISS = 10;     // 10회 연속 실패 → DEAD (~30초로 완화)
-  const missCount = new Map();
-  const recoveryAttempts = new Map(); // Track recovery attempts per agent
+  const INTERVAL = 2000;   // 2초
+  const GRACE_MS = 10000;  // 등록 후 10초 유예 (PID 탐지 완료 대기)
 
   setInterval(async () => {
     if (!agentManager) return;
     for (const agent of agentManager.getAllAgents()) {
       // Grace 기간 내 스킵
-      if (agent.firstSeen && Date.now() - agent.firstSeen < GRACE_MS) {
-        missCount.delete(agent.id);
+      if (agent.firstSeen && Date.now() - agent.firstSeen < GRACE_MS) continue;
+
+      const pid = sessionPids.get(agent.id);
+      if (!pid) {
+        retryPidDetection(agent.id);
+        // PID 없이 Grace 기간도 지난 에이전트 → 일정 시간 경과 시 제거
+        const noPidAge = Date.now() - (agent.firstSeen || 0);
+        if (noPidAge > GRACE_MS + 10000) { // Grace + 10초 추가 대기
+          debugLog(`[Live] ${agent.id.slice(0, 8)} no PID for ${Math.round(noPidAge/1000)}s → removing`);
+          agentManager.removeAgent(agent.id);
+        }
         continue;
       }
 
-      const pid = sessionPids.get(agent.id);
-      if (!pid) continue; // PID 없으면 스킵 (Grace 내에 훅으로 등록됨)
-
-      // Tier 1: Basic process existence check
-      let alive = await checkLivenessTier1(agent.id, pid);
-
-      // Tier 2: If Tier 1 fails, check process responsiveness
-      if (!alive) {
-        alive = await checkLivenessTier2(agent.id, pid);
+      // 1차: process.kill(pid, 0)으로 즉시 확인
+      const alive = await checkLivenessTier1(agent.id, pid);
+      if (alive) {
+        if (agent.state === 'Offline') {
+          agentManager.updateAgent({ ...agent, state: 'Waiting' }, 'live');
+        }
+        continue;
       }
 
-      if (alive) {
-        missCount.delete(agent.id);
-        recoveryAttempts.delete(agent.id);
-        // 만약 Offline이었다가 살아난 경우 (드문 케이스)
+      // 2차: PID 실패 → transcript_path로 즉시 재확인
+      // PID가 바뀌었을 수 있음 (재시작 등) — lsof로 현재 PID 재탐지
+      debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} dead → re-checking via transcript`);
+      const newPid = await new Promise((resolve) => {
+        detectClaudePidByTranscript(agent.jsonlPath, (result) => {
+          if (typeof result === 'number') resolve(result);
+          else if (Array.isArray(result)) {
+            const registeredPids = new Set(sessionPids.values());
+            resolve(result.find(p => !registeredPids.has(p) && p !== pid) || null);
+          } else resolve(null);
+        });
+      });
+
+      if (newPid) {
+        // PID 갱신 → 살림
+        sessionPids.set(agent.id, newPid);
+        debugLog(`[Live] ${agent.id.slice(0, 8)} PID renewed: ${pid} → ${newPid}`);
         if (agent.state === 'Offline') {
           agentManager.updateAgent({ ...agent, state: 'Waiting' }, 'live');
         }
       } else {
-        const n = (missCount.get(agent.id) || 0) + 1;
-        missCount.set(agent.id, n);
-
-        if (n === 3) {
-          // 9초 정도 안보이면 일단 Offline으로 상태 변경해서 사용자에게 알림
-          if (agent.state !== 'Offline') {
-            debugLog(`[Live-Tier1] ${agent.id.slice(0, 8)} pid=${pid} suspicious → Offline`);
-            agentManager.updateAgent({ ...agent, state: 'Offline' }, 'live');
-          }
-        }
-
-        if (n >= MAX_MISS) {
-          // DEAD 판정: 서브에이전트가 있는지 확인
-          const children = agentManager.getAllAgents().filter(a => a.parentId === agent.id);
-          const hasActiveChildren = children.length > 0;
-
-          if (hasActiveChildren) {
-            // 자식이 있으면 보이지 않아도 아바타는 유지 (상태만 Offline/Done으로)
-            if (agent.state !== 'Offline') {
-              agentManager.updateAgent({ ...agent, state: 'Offline' }, 'live');
-            }
-            debugLog(`[Live-Tier1] ${agent.id.slice(0, 8)} pid=${pid} DEAD but keeps for active sub-agents`);
-          } else {
-            // Tier 3: 마지막으로 세션 활성 상태 확인 후 자동 복구 시도
-            const attempts = recoveryAttempts.get(agent.id) || 0;
-
-            if (attempts < 2) {
-              // 최대 2번 복구 시도
-              recoveryAttempts.set(agent.id, attempts + 1);
-              debugLog(`[Live-Tier3] ${agent.id.slice(0, 8)} pid=${pid} DEAD → attempting recovery (${attempts + 1}/2)`);
-
-              const recovered = await attemptAgentRecovery(agent.id, pid);
-              if (recovered) {
-                // 복구 성공: missCount 리셋
-                missCount.delete(agent.id);
-                continue;
-              }
-            }
-
-            // 복구 실패 또는 복구 시도 초과: 제거
-            debugLog(`[Live-Tier3] ${agent.id.slice(0, 8)} pid=${pid} recovery failed → removing agent`);
-            missCount.delete(agent.id);
-            sessionPids.delete(agent.id);
-            agentManager.removeAgent(agent.id);
-          }
-        } else if (n > 1) {
-          debugLog(`[Live-Tier1] ${agent.id.slice(0, 8)} pid=${pid} miss ${n}/${MAX_MISS}`);
-        }
+        // transcript에서도 못 찾음 → 진짜 죽음 → 즉시 제거
+        debugLog(`[Live] ${agent.id.slice(0, 8)} confirmed dead → removing`);
+        sessionPids.delete(agent.id);
+        agentManager.removeAgent(agent.id);
       }
     }
   }, INTERVAL);
@@ -1067,6 +1128,8 @@ function handleSessionStart(sessionId, cwd, pid = 0, isTeammate = false, isSubag
     permissionMode: meta.permissionMode || null,
     source: meta.source || null,
     agentType: meta.agentType || null,
+    teammateName: meta.teammateName || null,
+    teamName: meta.teamName || null,
     isTeammate, isSubagent, parentId
   }, 'http');
   debugLog(`[Hook] SessionStart → agent: ${sessionId.slice(0, 8)} (${displayName}) ${isTeammate ? '[Team]' : ''} ${isSubagent ? '[Sub]' : ''} (Parent: ${parentId ? parentId.slice(0, 8) : 'none'})`);
@@ -1075,38 +1138,25 @@ function handleSessionStart(sessionId, cwd, pid = 0, isTeammate = false, isSubag
     sessionPids.set(sessionId, pid);
     return;
   }
-  const psCmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude*cli.js*' } | Select-Object -ExpandProperty ProcessId`;
-  const { execFile } = require('child_process');
-  execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 6000 }, (err, stdout) => {
-    if (err || !stdout) return;
-    const allPids = stdout.trim().split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
-    const registeredPids = new Set(sessionPids.values());
-    const newPid = allPids.find(p => !registeredPids.has(p));
-    if (newPid) {
-      sessionPids.set(sessionId, newPid);
-      debugLog(`[Hook] SessionStart PID assigned: ${sessionId.slice(0, 8)} → pid=${newPid}`);
+  detectClaudePidByTranscript(meta.jsonlPath || null, (result) => {
+    if (!result) return;
+    if (typeof result === 'number') {
+      sessionPids.set(sessionId, result);
+      debugLog(`[Hook] SessionStart PID via transcript: ${sessionId.slice(0, 8)} → pid=${result}`);
+    } else if (Array.isArray(result)) {
+      const registeredPids = new Set(sessionPids.values());
+      const newPid = result.find(p => !registeredPids.has(p));
+      if (newPid) {
+        sessionPids.set(sessionId, newPid);
+        debugLog(`[Hook] SessionStart PID via fallback: ${sessionId.slice(0, 8)} → pid=${newPid}`);
+      }
     }
   });
 }
 
 function cleanupAgentResources(sessionId) {
-  // 1. 플래그 정리
   firstPreToolUseDone.delete(sessionId);
-
-  // 2. 타이머 정리
-  const timer = postToolIdleTimers.get(sessionId);
-  if (timer) {
-    clearTimeout(timer);
-    postToolIdleTimers.delete(sessionId);
-  }
-
-  // 3. PID 정리
   sessionPids.delete(sessionId);
-
-  // 4. 생존 확인 카운터 정리 (startLivenessChecker의 missCount Map 접근을 위해 전역에서 삭제)
-  // Note: missCount는 startLivenessChecker 함수 내부 스코프에 있으므로,
-  //       생존 확인 checker에서 자연스럽게 정리됩니다.
-
   debugLog(`[Cleanup] Resources cleared for ${sessionId.slice(0, 8)}`);
 }
 
@@ -1117,15 +1167,7 @@ function handleSessionEnd(sessionId) {
   const agent = agentManager.getAgent(sessionId);
   if (agent) {
     debugLog(`[Hook] SessionEnd → removing agent ${sessionId.slice(0, 8)}`);
-    // JSONL에 SessionEnd 기록 (LogMonitor 좀비 방지)
-    if (agent.jsonlPath && fs.existsSync(agent.jsonlPath)) {
-      try {
-        fs.appendFileSync(agent.jsonlPath, JSON.stringify({
-          type: 'system', subtype: 'SessionEnd',
-          sessionId: agent.id, timestamp: new Date().toISOString()
-        }) + '\n');
-      } catch (e) { }
-    }
+    // SessionEnd JSONL 기록은 sessionend_hook.js가 담당 (이중 기록 방지)
     agentManager.removeAgent(sessionId);
   } else {
     debugLog(`[Hook] SessionEnd for unknown agent ${sessionId.slice(0, 8)}`);
@@ -1135,7 +1177,7 @@ function handleSessionEnd(sessionId) {
 
 
 app.whenReady().then(() => {
-  debugLog('Pixel Agent Desk started');
+  debugLog('========== Pixel Agent Desk started ==========');
 
   // 0. Claude CLI 훅 자동 등록 (npm install 누락 대비)
   registerClaudeHooks();
@@ -1183,7 +1225,7 @@ app.whenReady().then(() => {
       }
       // Forward to Dashboard window
       if (dashboardWindow && !dashboardWindow.isDestroyed()) {
-        const adaptedAgent = adaptAgentToMissionControl(agent);
+        const adaptedAgent = adaptAgentToDashboard(agent);
         dashboardWindow.webContents.send('dashboard-agent-added', adaptedAgent);
       }
       savePersistedState();
@@ -1197,7 +1239,7 @@ app.whenReady().then(() => {
       }
       // Forward to Dashboard window
       if (dashboardWindow && !dashboardWindow.isDestroyed()) {
-        const adaptedAgent = adaptAgentForMissionControl(agent);
+        const adaptedAgent = adaptAgentToDashboard(agent);
         dashboardWindow.webContents.send('dashboard-agent-updated', adaptedAgent);
       }
       savePersistedState();
@@ -1238,24 +1280,13 @@ app.whenReady().then(() => {
     }
 
     while (pendingSessionStarts.length > 0) {
-      const { sessionId, cwd, isTeammate, isSubagent, initialState, parentId } = pendingSessionStarts.shift();
-      handleSessionStart(sessionId, cwd, 0, isTeammate, isSubagent, initialState || 'Waiting', parentId);
+      const { sessionId, cwd, isTeammate, isSubagent, initialState, parentId, meta } = pendingSessionStarts.shift();
+      handleSessionStart(sessionId, cwd, 0, isTeammate, isSubagent, initialState || 'Waiting', parentId, meta || {});
     }
   });
 
-  // 좌비 에이전트 방지 (30분 미활성)
-  const INACTIVE_MS = 30 * 60 * 1000;
-  setInterval(() => {
-    if (!agentManager) return;
-    const now = Date.now();
-    for (const agent of agentManager.getAllAgents()) {
-      const age = now - (agent.lastActivity || agent.firstSeen || 0);
-      if (age > INACTIVE_MS) {
-        debugLog(`[Main] Inactive removal: ${agent.displayName}`);
-        agentManager.removeAgent(agent.id);
-      }
-    }
-  }, 5 * 60 * 1000);
+  // 에이전트 정리는 liveness checker(3초 PID 체크)가 전담
+  // 별도 타이머 기반 정리 불필요 — PID가 살아있으면 절대 안 죽임
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1274,8 +1305,6 @@ app.on('before-quit', () => {
 
   // 모든 Map 리소스 정리
   firstPreToolUseDone.clear();
-  postToolIdleTimers.forEach(timer => clearTimeout(timer));
-  postToolIdleTimers.clear();
   sessionPids.clear();
   pendingSessionStarts.length = 0;
 
@@ -1327,38 +1356,46 @@ ipcMain.on('dismiss-agent', (event, agentId) => {
   if (agentManager) agentManager.dismissAgent(agentId);
 });
 
+// 터미널 포커스 공용 함수 — PID에서 부모 체인을 5단계까지 올라가 터미널 창 탐색
+function focusTerminalByPid(pid, label = 'Main') {
+  const { execFile } = require('child_process');
+  // execFile: 쉘을 거치지 않으므로 인용부호 이스케이프 불필요
+  const psScript = `
+$memberDef = '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);' +
+  '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);' +
+  '[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);'
+Add-Type -MemberDefinition $memberDef -Name W -Namespace FocusUtil -ErrorAction SilentlyContinue
+$tpid = ${pid}
+$hwnd = [IntPtr]::Zero
+for ($i = 0; $i -lt 5; $i++) {
+  $p = Get-Process -Id $tpid -ErrorAction SilentlyContinue
+  if ($p -and $p.MainWindowHandle -ne [IntPtr]::Zero) {
+    $hwnd = $p.MainWindowHandle
+    break
+  }
+  $pp = (Get-CimInstance Win32_Process -Filter "ProcessId = $tpid" -ErrorAction SilentlyContinue).ParentProcessId
+  if (-not $pp -or $pp -eq 0 -or $pp -eq $tpid) { break }
+  $tpid = $pp
+}
+if ($hwnd -ne [IntPtr]::Zero) {
+  if ([FocusUtil.W]::IsIconic($hwnd)) { [FocusUtil.W]::ShowWindow($hwnd, 9) | Out-Null }
+  [FocusUtil.W]::SetForegroundWindow($hwnd) | Out-Null
+}
+`;
+  execFile('powershell.exe', ['-NoProfile', '-Command', psScript], { timeout: 5000 }, (err) => {
+    if (err) debugLog(`[${label}] Focus error: ${err.message}`);
+  });
+}
+
 // 터미널 포커스 IPC 핸들러 (실제 PID 활용)
 ipcMain.on('focus-terminal', (event, agentId) => {
   const pid = sessionPids.get(agentId);
-  if (!pid) return;
-
+  if (!pid) {
+    debugLog(`[Main] Focus: no PID for agent=${agentId.slice(0, 8)}`);
+    return;
+  }
   debugLog(`[Main] Focus requested for agent=${agentId.slice(0, 8)} pid=${pid}`);
-
-  // PowerShell을 사용하여 해당 PID를 소유한 창을 최상단으로 올림
-  const { exec } = require('child_process');
-  const psCmd = `
-    $targetPid = ${pid};
-    $wshell = New-Object -ComObject WScript.Shell;
-    $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue;
-    if ($proc) {
-      $hwnd = $proc.MainWindowHandle;
-      if ($hwnd -eq 0) {
-        # MainWindowHandle이 없는 경우 부모/자식 관계 탐색 (터미널 쉘 특성)
-        $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" | Select-Object -ExpandProperty ParentProcessId;
-        $proc = Get-Process -Id $parent -ErrorAction SilentlyContinue;
-        $hwnd = $proc.MainWindowHandle;
-      }
-      if ($hwnd -ne 0) {
-        $type = "[DllImport(\\"user32.dll\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);";
-        Add-Type -MemberDefinition $type -Name "Win32Utils" -Namespace "Win32";
-        [Win32.Win32Utils]::SetForegroundWindow($hwnd);
-      }
-    }
-  `.replace(/\n/g, ' ');
-
-  exec(`powershell.exe -NoProfile -Command "${psCmd}"`, (err) => {
-    if (err) debugLog(`[Main] Focus error: ${err.message}`);
-  });
+  focusTerminalByPid(pid, 'Main');
 });
 
 // =====================================================
@@ -1437,37 +1474,13 @@ ipcMain.handle('execute-recovery-action', async (event, errorId, action) => {
 
 // Handle focus-agent command from Dashboard
 ipcMain.on('dashboard-focus-agent', (event, agentId) => {
-  debugLog(`[MissionControl] Focus requested for agent: ${agentId.slice(0, 8)}`);
-  // Forward to the existing focus-terminal handler
   const pid = sessionPids.get(agentId);
   if (!pid) {
-    debugLog(`[MissionControl] No PID found for agent: ${agentId.slice(0, 8)}`);
+    debugLog(`[Dashboard] Focus: no PID for agent=${agentId.slice(0, 8)}`);
     return;
   }
-
-  const { exec } = require('child_process');
-  const psCmd = `
-    $targetPid = ${pid};
-    $wshell = New-Object -ComObject WScript.Shell;
-    $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue;
-    if ($proc) {
-      $hwnd = $proc.MainWindowHandle;
-      if ($hwnd -eq 0) {
-        $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" | Select-Object -ExpandProperty ParentProcessId;
-        $proc = Get-Process -Id $parent -ErrorAction SilentlyContinue;
-        $hwnd = $proc.MainWindowHandle;
-      }
-      if ($hwnd -ne 0) {
-        $type = "[DllImport(\\"user32.dll\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);";
-        Add-Type -MemberDefinition $type -Name "Win32Utils" -Namespace "Win32";
-        [Win32.Win32Utils]::SetForegroundWindow($hwnd);
-      }
-    }
-  `.replace(/\n/g, ' ');
-
-  exec(`powershell.exe -NoProfile -Command "${psCmd}"`, (err) => {
-    if (err) debugLog(`[MissionControl] Focus error: ${err.message}`);
-  });
+  debugLog(`[Dashboard] Focus requested for agent=${agentId.slice(0, 8)} pid=${pid}`);
+  focusTerminalByPid(pid, 'Dashboard');
 });
 
 // Handle dismiss-agent command from Dashboard
@@ -1482,7 +1495,7 @@ ipcMain.on('dashboard-dismiss-agent', (event, agentId) => {
 ipcMain.on('get-dashboard-agents', (event) => {
   if (agentManager) {
     const agents = agentManager.getAllAgents();
-    const adaptedAgents = agents.map(agent => adaptAgentToMissionControl(agent));
+    const adaptedAgents = agents.map(agent => adaptAgentToDashboard(agent));
     event.reply('dashboard-agents-response', adaptedAgents);
   } else {
     event.reply('dashboard-agents-response', []);

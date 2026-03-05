@@ -86,12 +86,17 @@ function adaptAgentToDashboard(pixelAgent) {
     type: determineAgentType(pixelAgent),
     model: pixelAgent.model || null,
     tokenUsage: pixelAgent.tokenUsage || { inputTokens: 0, outputTokens: 0, estimatedCost: 0 },
+    currentTool: pixelAgent.currentTool || null,
+    lastMessage: pixelAgent.lastMessage || null,
     metadata: {
       isSubagent: pixelAgent.isSubagent || false,
       isTeammate: pixelAgent.isTeammate || false,
       projectPath: pixelAgent.projectPath || '',
       parentId: pixelAgent.parentId || null,
       permissionMode: pixelAgent.permissionMode || null,
+      teammateName: pixelAgent.teammateName || null,
+      teamName: pixelAgent.teamName || null,
+      endReason: pixelAgent.endReason || null,
       source: 'pixel-agent-desk'
     },
     timing: {

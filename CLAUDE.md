@@ -1,11 +1,17 @@
 # CLAUDE.md — Pixel Agent Desk
 
-## 현재 진행 상태 (2026-03-05 기준)
+## 현재 진행 상태 (2026-03-06 기준)
 - ✅ **Phase 3A:** 데이터 파이프라인 정비 (JSONL 스캐너, 훅 메타데이터 저장) 완료
 - ✅ **Phase 3B-1:** SSE 이벤트 스트림 완료
 - ✅ **Phase 3B-2:** REST API 확장 완료
 - ✅ **Phase 3B-3:** 대시보드 UI 리디자인 완료
 - ✅ **Phase 3 전체 완료** — 백엔드 파이프라인 및 대시보드 UI 모두 구현 완료
+- ✅ **훅 최적화:** HTTP 훅 전환 (hook.js 프로세스 스폰 제거), tool_name/notification_type/team 필드 추출
+- ✅ **PID 정확도:** transcript_path 기반 lsof PID 탐지, 크로스플랫폼 지원 (Windows PowerShell + Linux/macOS pgrep/lsof)
+- ✅ **Liveness 간소화:** 타이머 기반 정리 제거, PID 기반 즉시 판단 (2초 주기)
+
+## Known Issues
+- **ESC 중단 시 Thinking 상태 유지:** 사용자가 ESC로 Claude 응답을 중단하면 Stop 훅이 발생하지 않아 아바타가 Thinking 상태에 머무름. CLI 프로세스는 살아있으므로 PID 기반 Liveness Checker로도 감지 불가.
 
 ## 프로젝트 개요
 
@@ -25,7 +31,7 @@ Claude CLI 훅 이벤트를 HTTP POST로 수신하고, 에이전트별 상태(Wa
 ## 핵심 아키텍처
 
 ```
-Claude CLI ──hook.js──▶ HTTP POST(:47821) ──main.js:processHookEvent()
+Claude CLI ──HTTP hook──▶ POST(:47821) ──main.js:processHookEvent()
                                                     │
                                     ┌────────────────┤
                                     ▼                ▼
@@ -100,6 +106,8 @@ SessionEnd → 에이전트 제거
 
 ## 훅 이벤트 필드 (Claude CLI 공식)
 
+**훅 방식: HTTP 훅** (type: "http") — Claude가 직접 localhost:47821/hook으로 POST. hook.js 프로세스 스폰 불필요.
+
 모든 훅 이벤트의 공통 입력:
 ```json
 {
@@ -113,7 +121,18 @@ SessionEnd → 에이전트 제거
 }
 ```
 
-SessionStart 전용 필드: `source` (startup/resume/clear/compact), `model`, `agent_type`
+### 이벤트별 활용 필드
+
+| 이벤트 | 주요 필드 | 용도 |
+|--------|----------|------|
+| SessionStart | `source` (startup/resume/clear/compact), `model`, `agent_type` | compact 시 중복 에이전트 방지 |
+| PreToolUse/PostToolUse | `tool_name` | 아바타 버블에 현재 도구 표시 |
+| Notification | `notification_type` (permission_prompt/idle_prompt/auth_success) | Waiting vs Help 구분 |
+| Stop/TaskCompleted | `last_assistant_message`, `task_id`, `task_subject` | 마지막 메시지 표시, 팀 작업 추적 |
+| SessionEnd | `reason` | 종료 사유 로깅 |
+| SubagentStart/Stop | `agent_id`, `agent_type`, `agent_transcript_path` | 서브에이전트 타입 배지 |
+| TeammateIdle | `teammate_name`, `team_name` | 팀원 이름/팀명 표시 |
+| PreCompact | `trigger` (manual/auto) | 컨텍스트 윈도우 건강 모니터링 |
 
 ## 테스트
 
@@ -144,18 +163,15 @@ npm run dashboard  # 대시보드 서버만 (포트 3000)
 ### 동작 방식
 
 - **설정 파일:** `~/.claude/settings.json` (Windows/Linux/macOS)
-- **등록 내용:** 모든 Claude CLI 훅 이벤트에 `hook.js` 자동 등록
+- **등록 내용:** 모든 Claude CLI 훅 이벤트에 HTTP 훅 자동 등록 (type: "http")
 - **수동 등록:** 자동 등록이 실패할 경우 `~/.claude/settings.json`을 직접 수정
 
 **수동 등록 예시:**
 ```json
 {
   "hooks": {
-    "SessionStart": "node \"D:/projects/pixel-agent-desk-master/hook.js\"",
-    "SessionEnd": "node \"D:/projects/pixel-agent-desk-master/hook.js\"",
-    "PreToolUse": "node \"D:/projects/pixel-agent-desk-master/hook.js\"",
-    "PostToolUse": "node \"D:/projects/pixel-agent-desk-master/hook.js\"",
-    ...
+    "SessionStart": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }]
   }
 }
 ```

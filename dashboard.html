@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -190,6 +191,7 @@
         opacity: 0;
         transform: translateX(-10px);
       }
+
       to {
         opacity: 1;
         transform: translateX(0);
@@ -307,12 +309,29 @@
       transition: background 0.3s ease;
     }
 
-    .agent-card.state-working::before { background: var(--color-primary); }
-    .agent-card.state-thinking::before { background: var(--color-info); }
-    .agent-card.state-waiting::before { background: var(--color-warning); }
-    .agent-card.state-done::before { background: var(--color-success); }
-    .agent-card.state-help::before { background: var(--color-error); }
-    .agent-card.state-error::before { background: var(--color-error); }
+    .agent-card.state-working::before {
+      background: var(--color-primary);
+    }
+
+    .agent-card.state-thinking::before {
+      background: var(--color-info);
+    }
+
+    .agent-card.state-waiting::before {
+      background: var(--color-warning);
+    }
+
+    .agent-card.state-done::before {
+      background: var(--color-success);
+    }
+
+    .agent-card.state-help::before {
+      background: var(--color-error);
+    }
+
+    .agent-card.state-error::before {
+      background: var(--color-error);
+    }
 
     .agent-card:hover {
       border-color: var(--color-primary);
@@ -553,6 +572,7 @@
       from {
         opacity: 0;
       }
+
       to {
         opacity: 1;
       }
@@ -633,6 +653,7 @@
     }
   </style>
 </head>
+
 <body>
   <div class="dashboard">
     <!-- Header -->
@@ -742,21 +763,21 @@
       });
 
       eventSource.addEventListener('agent.created', (event) => {
-        const data = JSON.parse(event.data);
-        console.log('[Dashboard] 에이전트 생성:', data);
+        const payload = JSON.parse(event.data);
+        const data = payload.data;
         updateAgent(data);
         addLiveFeed('생성', `${data.name || 'Agent'} 에이전트가 생성되었습니다`);
       });
 
       eventSource.addEventListener('agent.updated', (event) => {
-        const data = JSON.parse(event.data);
-        console.log('[Dashboard] 에이전트 업데이트:', data);
+        const payload = JSON.parse(event.data);
+        const data = payload.data;
         updateAgent(data);
       });
 
       eventSource.addEventListener('agent.removed', (event) => {
-        const data = JSON.parse(event.data);
-        console.log('[Dashboard] 에이전트 제거:', data);
+        const payload = JSON.parse(event.data);
+        const data = payload.data;
         removeAgent(data.id);
         addLiveFeed('제거', `에이전트가 제거되었습니다 (${data.id?.slice(0, 8)}...)`);
       });
@@ -775,7 +796,7 @@
         console.log('[Dashboard] 초기 에이전트 데이터:', agents.length);
 
         for (const agent of agents) {
-          state.agents.set(agent.sessionId, agent);
+          state.agents.set(agent.id, agent);
         }
 
         updateStats();
@@ -790,7 +811,7 @@
      * 에이전트 업데이트
      */
     function updateAgent(agent) {
-      state.agents.set(agent.sessionId, agent);
+      state.agents.set(agent.id, agent);
       updateStats();
       render();
     }
@@ -891,7 +912,7 @@
       }
 
       elements.mainContent.innerHTML = `
-        <div class="stats-grid fade-in">
+        <div class="stats-grid">
           <div class="stat-card">
             <div class="stat-header">
               <span class="stat-icon">👥</span>
@@ -926,7 +947,7 @@
           </div>
         </div>
 
-        <div class="section fade-in">
+        <div class="section">
           <div class="section-header">
             <h2 class="section-title">활성 에이전트</h2>
           </div>
@@ -958,7 +979,7 @@
         groups.get(project).push(agent);
       }
 
-      let html = '<div class="section fade-in">';
+      let html = '<div class="section">';
 
       for (const [project, projectAgents] of groups) {
         html += `
@@ -999,22 +1020,41 @@
       ));
 
       elements.mainContent.innerHTML = `
-        <div class="section fade-in">
+        <div class="stats-grid" style="margin-bottom: 24px;">
+          <div class="stat-card" style="grid-column: span 2;">
+            <div class="stat-header">
+              <span class="stat-icon">📈</span>
+              <span class="stat-label">총 토큰 사용량</span>
+            </div>
+            <div class="stat-value">${formatNumber(state.stats.totalTokens)}</div>
+            <div class="stat-change">활성화된 모든 세션 합산</div>
+          </div>
+          <div class="stat-card" style="grid-column: span 2;">
+            <div class="stat-header">
+              <span class="stat-icon">💰</span>
+              <span class="stat-label">총 예상 비용</span>
+            </div>
+            <div class="stat-value">$${state.stats.totalCost.toFixed(4)}</div>
+            <div class="stat-change">Claude API 청구 기준</div>
+          </div>
+        </div>
+
+        <div class="section">
           <div class="section-header">
-            <h2 class="section-title">토큰 사용량</h2>
+            <h2 class="section-title">토큰 사용량 상세</h2>
           </div>
           <div class="token-chart">
             <h3 class="chart-title">에이전트별 토큰 사용량</h3>
             <div class="chart-bars">
               ${sortedAgents.map(agent => {
-                const inputTokens = agent.tokenUsage?.inputTokens || 0;
-                const outputTokens = agent.tokenUsage?.outputTokens || 0;
-                const totalTokens = inputTokens + outputTokens;
-                const percentage = maxTokens > 0 ? (totalTokens / maxTokens * 100) : 0;
+        const inputTokens = agent.tokenUsage?.inputTokens || 0;
+        const outputTokens = agent.tokenUsage?.outputTokens || 0;
+        const totalTokens = inputTokens + outputTokens;
+        const percentage = maxTokens > 0 ? (totalTokens / maxTokens * 100) : 0;
 
-                return `
+        return `
                   <div class="chart-bar">
-                    <div class="bar-label">${agent.name || agent.sessionId.slice(0, 8)}</div>
+                    <div class="bar-label">${agent.name || agent.id.slice(0, 8)}</div>
                     <div class="bar-track">
                       <div class="bar-fill" style="width: ${percentage}%">
                         <span class="bar-value">${formatNumber(totalTokens)}</span>
@@ -1023,12 +1063,12 @@
                     <div class="bar-total">$${(agent.tokenUsage?.estimatedCost || 0).toFixed(4)}</div>
                   </div>
                 `;
-              }).join('')}
+      }).join('')}
             </div>
           </div>
         </div>
 
-        <div class="section fade-in">
+        <div class="section">
           <div class="section-header">
             <h2 class="section-title">모든 에이전트</h2>
           </div>
@@ -1055,7 +1095,7 @@
       const model = agent.model || 'Unknown';
 
       return `
-        <div class="agent-card ${statusClass} fade-in">
+        <div class="agent-card ${statusClass}">
           <div class="agent-header">
             <div class="agent-name">
               <span>${agent.name || 'Agent'}</span>
@@ -1066,7 +1106,7 @@
           <div class="agent-body">
             <div class="agent-row">
               <span class="agent-label">ID:</span>
-              <span class="agent-id">${agent.sessionId.slice(0, 8)}...</span>
+              <span class="agent-id">${agent.id.slice(0, 8)}...</span>
             </div>
             <div class="agent-row">
               <span class="agent-label">프로젝트:</span>
@@ -1103,7 +1143,7 @@
      */
     function renderEmpty() {
       elements.mainContent.innerHTML = `
-        <div class="empty-state fade-in">
+        <div class="empty-state">
           <div class="empty-state-icon">😴</div>
           <div class="empty-state-title">대기 중</div>
           <div class="empty-state-text">현재 작업 중인 에이전트가 없습니다.</div>
@@ -1228,4 +1268,5 @@
     }
   </script>
 </body>
+
 </html>

@@ -178,86 +178,65 @@ html {
 }
 
 /* ════════════════════════════════════════
-   New: Agent Header & Tags
+   터미널 포커스 버튼
    ════════════════════════════════════════ */
-.agent-header {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  width: 100%;
-  margin-bottom: 4px;
-}
-
-.project-tag-wrapper {
-  position: relative;
-  cursor: help;
-  pointer-events: auto;
-  margin-bottom: 2px;
-}
-
-/* 즉각 반응형 커스텀 툴팁 (최상위 z-index 및 짤림 방지) */
-.project-tag-wrapper:hover::after {
-  content: attr(data-full-path);
+.focus-terminal-btn {
   position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-top: 4px;
-  background: rgba(0, 0, 0, 0.95);
-  color: white;
-  padding: 5px 10px;
-  border-radius: 4px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-width: 150px;
-  width: max-content;
-  z-index: 999999;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #4fc3f7;
+  font-family: 'Consolas', 'Courier New', monospace;
   font-size: 11px;
+  font-weight: 900;
+  line-height: 18px;
   text-align: center;
-  pointer-events: none;
-  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.15s, transform 0.1s;
+  z-index: 10;
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+  padding: 0;
 }
 
-.project-tag {
-  display: block;
-  font-family: 'Pretendard Variable', sans-serif;
-  font-size: 11px;
-  /* 폰트 약간 더 크게 */
-  font-weight: 800;
-  color: #fff;
+.focus-terminal-btn:hover {
+  opacity: 1;
   background: rgba(0, 0, 0, 0.7);
-  padding: 2px 6px;
-  border-radius: 4px;
-  max-width: 60px;
-  /* 말줄임이 더 빨리, 많이 오도록 폭 축소 */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  letter-spacing: -0.02em;
+  transform: scale(1.1);
 }
 
+.focus-terminal-btn:active {
+  transform: scale(0.95);
+}
+
+.focus-terminal-btn.clicked {
+  background: #4fc3f7;
+  color: #000;
+  opacity: 1;
+}
+
+/* ════════════════════════════════════════
+   Agent Tags
+   ════════════════════════════════════════ */
 .type-tag {
   display: inline-block;
   font-family: 'Pretendard Variable', sans-serif;
-  font-size: 11px;
-  font-weight: 800;
-  /* 900 -> 800 변경해서 약간 부드럽게 */
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
-  padding: 2px 6px;
-  /* 박스 크기 슬림하게 축소 */
-  border-radius: 4px;
-  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.03em;
   color: #fff;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
-  /* 그림자 완화 */
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  /* 박스 그림자 완화 */
-  margin-top: 2px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+  margin-bottom: 2px;
   -webkit-app-region: drag;
-  /* 드래그 가능 영역으로 설정 */
   pointer-events: auto;
-  /* 드래그 이벤트를 받기 위해 필수 */
 }
 
 /* 타입별 스타일 - 너무 튀지 않게 조화로운 톤다운 색상으로 변경 */

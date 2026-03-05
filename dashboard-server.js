@@ -7,9 +7,10 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const { adaptAgentToDashboard } = require('./dashboardAdapter');
 
 const PORT = 3000;
-const HTML_FILE = path.join(__dirname, 'mission-control.html');
+const HTML_FILE = path.join(__dirname, 'dashboard.html');
 
 // MIME 타입 매핑
 const MIME_TYPES = {
@@ -38,12 +39,14 @@ function setAgentManager(manager) {
   // Task 3B-1: AgentManager 이벤트 → SSE 브로드캐스트
   if (agentManager) {
     agentManager.on('agent-added', (agent) => {
-      broadcastSSE('agent.created', agent);
-      broadcastUpdate('agent-added', agent);
+      const adapted = adaptAgentToDashboard(agent);
+      broadcastSSE('agent.created', adapted);
+      broadcastUpdate('agent-added', adapted);
     });
     agentManager.on('agent-updated', (agent) => {
-      broadcastSSE('agent.updated', agent);
-      broadcastUpdate('agent-updated', agent);
+      const adapted = adaptAgentToDashboard(agent);
+      broadcastSSE('agent.updated', adapted);
+      broadcastUpdate('agent-updated', adapted);
     });
     agentManager.on('agent-removed', (data) => {
       broadcastSSE('agent.removed', data);
@@ -104,7 +107,6 @@ function calculateStats() {
     // Active/Completed counts
     if (agent.state === 'Working' || agent.state === 'Thinking') {
       stats.active++;
-      stats.working++;
     } else if (agent.state === 'Done') {
       stats.completed++;
       stats.done++;
@@ -168,7 +170,7 @@ function calculateStats() {
  * Task 3B-1: SSE 브로드캐스트
  */
 function broadcastSSE(type, data) {
-  const payload = `data: ${JSON.stringify({ type, data, timestamp: Date.now() })}\n\n`;
+  const payload = `event: ${type}\ndata: ${JSON.stringify({ type, data, timestamp: Date.now() })}\n\n`;
   for (const res of sseClients) {
     try { res.write(payload); } catch { sseClients.delete(res); }
   }
@@ -257,7 +259,7 @@ function handleAPIRequest(req, res, url) {
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     });
-    res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
+    res.write(`event: connected\ndata: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
     sseClients.add(res);
 
     // Keep-alive (15초)
@@ -276,7 +278,7 @@ function handleAPIRequest(req, res, url) {
       res.end(JSON.stringify({ error: 'Agent manager not available' }));
       return;
     }
-    const agents = agentManager.getAllAgents();
+    const agents = agentManager.getAllAgents().map(adaptAgentToDashboard);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(agents));
     return;
@@ -388,19 +390,16 @@ server.on('upgrade', (req, socket, head) => {
         const len = dataBytes.length;
 
         if (len < 126) {
-          frame.push(len | 0x80);
+          frame.push(len);
         } else if (len < 65536) {
-          frame.push(126 | 0x80, (len >> 8) & 0xff, len & 0xff);
+          frame.push(126, (len >> 8) & 0xff, len & 0xff);
         } else {
-          frame.push(127 | 0x80,
-            (len >> 56) & 0xff, (len >> 48) & 0xff, (len >> 40) & 0xff, (len >> 32) & 0xff,
+          frame.push(127,
+            0, 0, 0, 0,  // high 32 bits (JS safe integer range)
             (len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff);
         }
 
-        // Mask key (required for server-to-client)
-        const maskKey = Buffer.from([0, 0, 0, 0]);
-        frame.push(...maskKey);
-
+        // Server-to-client frames MUST NOT be masked (RFC 6455 Section 5.1)
         socket.write(Buffer.concat([Buffer.from(frame), dataBytes]));
       },
       close: () => {
@@ -442,7 +441,7 @@ server.on('upgrade', (req, socket, head) => {
 function startServer() {
   server.listen(PORT, () => {
     console.log(`[Dashboard Server] 🚀 Server running at http://localhost:${PORT}`);
-    console.log(`[Dashboard Server] 📊 Serving mission-control.html`);
+    console.log(`[Dashboard Server] 📊 Serving dashboard.html`);
     console.log(`[Dashboard Server] 🔌 WebSocket endpoint: ws://localhost:${PORT}/ws`);
   });
 
@@ -483,7 +482,7 @@ process.on('SIGINT', () => {
 module.exports = {
   setAgentManager,
   setSessionScanner,
-  setMissionControlWindow,
+  setDashboardWindow,
   broadcastUpdate,
   broadcastSSE,
   calculateStats,

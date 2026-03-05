@@ -1,7 +1,7 @@
 /**
  * Universal hook script for all Claude CLI events.
- * Receives JSON from stdin, adds process.ppid (claude PID),
- * and forwards to the local HTTP hook server.
+ * Receives JSON from stdin and forwards to the local HTTP hook server.
+ * PID 탐지는 main.js에서 PowerShell로 수행 (process.ppid는 셸 PID라 부정확).
  */
 const http = require('http');
 const fs = require('fs');
@@ -14,8 +14,8 @@ process.stdin.on('data', d => chunks.push(d));
 process.stdin.on('end', () => {
     try {
         const data = JSON.parse(Buffer.concat(chunks).toString());
-        // claude 프로세스 PID: hook.js의 부모 프로세스
-        data._pid = process.ppid;
+        // process.ppid는 셸(cmd.exe) PID이므로 사용하지 않음
+        // 실제 Claude PID는 main.js에서 PowerShell로 탐지
         data._timestamp = Date.now();
 
         // 1. 오프라인 복구 용도로 로컬 파일에 기록 (pixel-agent-desk가 종료된 상태라도 훅 내역 보존)
