@@ -14,7 +14,7 @@ Claude CLI의 Hook 이벤트를 실시간으로 수신하여 여러 에이전트
 - **인터랙티브 대시버드**:
   - **터미널 자동 포커스**: 아바타 클릭 시 해당 Claude 세션이 실행 중인 터미널 창을 최상단으로 가져옵니다.
   - **자동 복구 (Resume)**: 앱을 껐다 켜도 현재 실행 중인 모든 Claude 세션을 자동으로 찾아 아바타를 복구합니다.
-  - **Mission Control**: 웹 대시보드로 팀 전체 현황을 모니터링할 수 있습니다 (REST API + WebSocket 지원).
+  - **Dashboard**: 웹 대시보드로 팀 전체 현황을 모니터링할 수 있습니다 (REST API + WebSocket 지원).
 - **자동 훅 등록**: 앱 시작 시 Claude CLI의 `settings.json`에 Hook 스크립트를 자동 등록합니다.
 
 ## 🚀 시작하기
@@ -47,9 +47,9 @@ pixel-agent-desk/
 ├── renderer.js                # 애니메이션 엔진, 에이전트 0개일 때 대기 아바타 표출
 ├── preload.js                 # IPC 통신 브릿지
 ├── utils.js                   # 유틸리티 함수
-├── mission-control-server.js  # Mission Control 웹 서버 (REST API + WebSocket)
-├── mission-control.html       # Mission Control 대시보드 페이지
-├── missionControlPreload.js   # Mission Control IPC 브릿지
+├── dashboard-server.js  # Dashboard 웹 서버 (REST API + WebSocket)
+├── dashboard.html       # Dashboard 대시보드 페이지
+├── missionControlPreload.js   # Dashboard IPC 브릿지
 ├── index.html                 # UI 뼈대 구조
 ├── styles.css                 # 디자인 시스템
 └── package.json               # 의존성 관리

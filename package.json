@@ -9,7 +9,7 @@
     "test": "jest",
     "test:coverage": "jest --coverage",
     "test:watch": "jest --watch",
-    "mission-control": "node mission-control-server.js"
+    "dashboard": "node dashboard-server.js"
   },
   "keywords": [
     "electron",
