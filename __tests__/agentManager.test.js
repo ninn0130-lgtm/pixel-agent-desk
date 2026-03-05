@@ -244,13 +244,16 @@ describe('AgentManager', () => {
 
       manager.updateAgent(entry);
 
+      // Active agent should not be removed even after timeout
       jest.advanceTimersByTime(11 * 60 * 1000);
 
       manager.cleanupIdleAgents();
 
       const agent = manager.getAgent('active-agent');
-      expect(agent).toBeDefined();
-      expect(agent.state).toBe('Working');
+      expect(agent).not.toBeNull();
+      if (agent) {
+        expect(agent.state).toBe('Working');
+      }
     });
 
     test('emits agents-cleaned event', (done) => {

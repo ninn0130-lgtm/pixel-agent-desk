@@ -666,7 +666,7 @@ const sessionPids = new Map(); // sessionId → 실제 claude 프로세스 PID
 function startLivenessChecker() {
   const INTERVAL = 3000;   // 3초
   const GRACE_MS = 15000;  // 등록 후 15초는 스킵 (WMI 조회 완료 전 유예)
-  const MAX_MISS = 2;      // 2회 연속 실패 → DEAD (~6초)
+  const MAX_MISS = 10;     // 10회 연속 실패 → DEAD (~30초로 완화)
   const missCount = new Map();
 
   setInterval(() => {
@@ -686,16 +686,45 @@ function startLivenessChecker() {
 
       if (alive) {
         missCount.delete(agent.id);
+        // 만약 Offline이었다가 살아난 경우 (드문 케이스)
+        if (agent.state === 'Offline') {
+          agentManager.updateAgent({ ...agent, state: 'Waiting' }, 'live');
+        }
       } else {
         const n = (missCount.get(agent.id) || 0) + 1;
         missCount.set(agent.id, n);
-        if (n < MAX_MISS) {
+
+        if (n === 3) {
+          // 9초 정도 안보이면 일단 Offline으로 상태 변경해서 사용자에게 알림
+          if (agent.state !== 'Offline') {
+            debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} suspicious → Offline`);
+            agentManager.updateAgent({ ...agent, state: 'Offline' }, 'live');
+          }
+        }
+
+        if (n >= MAX_MISS) {
+          // 진짜로 죽은 것으로 판단
+
+          // 서브에이전트가 있는지 확인
+          const children = agentManager.getAllAgents().filter(a => a.parentId === agent.id);
+          const hasActiveChildren = children.length > 0;
+
+          if (hasActiveChildren) {
+            // 자식이 있으면 보이지 않아도 아바타는 유지 (상태만 Offline/Done으로)
+            if (agent.state !== 'Offline') {
+              agentManager.updateAgent({ ...agent, state: 'Offline' }, 'live');
+            }
+            // missCount는 유지하여 나중에 자식들 다 끝나면 삭제되게 유도할 수 있지만 
+            // 일단은 자식이 있는 동안은 삭제를 보류
+            debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} DEAD but keeps for active sub-agents`);
+          } else {
+            debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} DEAD → removing`);
+            missCount.delete(agent.id);
+            sessionPids.delete(agent.id);
+            agentManager.removeAgent(agent.id);
+          }
+        } else if (n > 1) {
           debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} miss ${n}/${MAX_MISS}`);
-        } else {
-          debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} DEAD → removing`);
-          missCount.delete(agent.id);
-          sessionPids.delete(agent.id);
-          agentManager.removeAgent(agent.id);
         }
       }
     }

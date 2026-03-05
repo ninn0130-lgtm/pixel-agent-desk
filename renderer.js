@@ -131,6 +131,14 @@ function updateAgentState(agentId, container, agentOrState) {
   container.className = `agent-card ${config.class}`;
   if (isAggregated) container.classList.add('is-aggregated');
 
+  if (isAgentObj) {
+    if (agentOrState.isSubagent) container.classList.add('is-subagent');
+    else container.classList.remove('is-subagent');
+
+    if (agentOrState.isTeammate) container.classList.add('is-teammate');
+    else container.classList.remove('is-teammate');
+  }
+
   // Play animation
   playAnimation(agentId, character, config.anim);
 
@@ -371,6 +379,16 @@ function addAgent(agent) {
 function updateAgent(agent) {
   const card = document.querySelector(`[data-agent-id="${agent.id}"]`);
   if (!card) return;
+
+  // 전역 데이터 캐시 업데이트 (정렬 및 레이아웃용)
+  if (window.lastAgents) {
+    const idx = window.lastAgents.findIndex(a => a.id === agent.id);
+    if (idx > -1) {
+      window.lastAgents[idx] = agent;
+    } else {
+      window.lastAgents.push(agent);
+    }
+  }
 
   updateAgentState(agent.id, card, agent);
   updateGridLayout();
@@ -761,14 +779,14 @@ function createErrorUI(errorContext) {
 
     // 심각도별 스타일
     const severityClass = err.severity === 'fatal' ? 'error-fatal' :
-                          err.severity === 'error' ? 'error-error' :
-                          err.severity === 'warning' ? 'error-warning' : 'error-info';
+      err.severity === 'error' ? 'error-error' :
+        err.severity === 'warning' ? 'error-warning' : 'error-info';
     toast.classList.add(severityClass);
 
     // 에러 내용
     const icon = err.severity === 'fatal' ? '💀' :
-                 err.severity === 'error' ? '❌' :
-                 err.severity === 'warning' ? '⚠️' : 'ℹ️';
+      err.severity === 'error' ? '❌' :
+        err.severity === 'warning' ? '⚠️' : 'ℹ️';
 
     toast.innerHTML = `
       <div class="error-header">
