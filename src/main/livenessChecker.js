@@ -26,8 +26,7 @@ function detectClaudePidByTranscript(jsonlPath, callback) {
   const { execFile } = require('child_process');
 
   if (!jsonlPath) {
-    // fallback(모든 claude PID 수집)은 다중 세션 시 잘못된 PID를 할당할 수 있으므로 사용하지 않음
-    callback(null);
+    detectClaudePidsFallback(callback);
     return;
   }
 
@@ -45,8 +44,7 @@ function detectClaudePidByTranscript(jsonlPath, callback) {
           return callback(pids[0]);
         }
       }
-      // transcript 기반 탐지 실패 시 fallback 사용하지 않음 (다중 세션 PID 오매핑 방지)
-      callback(null);
+      detectClaudePidsFallback(callback);
     });
   } else {
     execFile('lsof', ['-t', resolved], { timeout: 3000 }, (err, stdout) => {
@@ -56,7 +54,7 @@ function detectClaudePidByTranscript(jsonlPath, callback) {
           return callback(pids[0]);
         }
       }
-      callback(null);
+      detectClaudePidsFallback(callback);
     });
   }
 }
@@ -95,11 +93,19 @@ function retryPidDetection(sessionId, agentManager, debugLog) {
 
   detectClaudePidByTranscript(jsonlPath, (result) => {
     _pidRetryRunning.delete(sessionId);
+    if (!result) return;
+
     if (typeof result === 'number') {
       sessionPids.set(sessionId, result);
       debugLog(`[Live] PID assigned via transcript: ${sessionId.slice(0, 8)} → pid=${result}`);
+    } else if (Array.isArray(result)) {
+      const registeredPids = new Set(sessionPids.values());
+      const newPid = result.find(p => !registeredPids.has(p));
+      if (newPid) {
+        sessionPids.set(sessionId, newPid);
+        debugLog(`[Live] PID assigned via fallback: ${sessionId.slice(0, 8)} → pid=${newPid}`);
+      }
     }
-    // array(fallback) 결과는 다중 세션 시 잘못된 PID 매핑 위험 → 무시
   });
 }
 
@@ -137,8 +143,11 @@ function startLivenessChecker({ agentManager, debugLog }) {
       debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} dead → re-checking via transcript`);
       const newPid = await new Promise((resolve) => {
         detectClaudePidByTranscript(agent.jsonlPath, (result) => {
-          // transcript 기반 정확한 매치만 수락
-          resolve(typeof result === 'number' ? result : null);
+          if (typeof result === 'number') resolve(result);
+          else if (Array.isArray(result)) {
+            const registeredPids = new Set(sessionPids.values());
+            resolve(result.find(p => !registeredPids.has(p) && p !== pid) || null);
+          } else resolve(null);
         });
       });
 

@@ -270,11 +270,18 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
       return;
     }
     detectClaudePidByTranscript(meta.jsonlPath || null, (result) => {
+      if (!result) return;
       if (typeof result === 'number') {
         sessionPids.set(sessionId, result);
         debugLog(`[Hook] SessionStart PID via transcript: ${sessionId.slice(0, 8)} → pid=${result}`);
+      } else if (Array.isArray(result)) {
+        const registeredPids = new Set(sessionPids.values());
+        const newPid = result.find(p => !registeredPids.has(p));
+        if (newPid) {
+          sessionPids.set(sessionId, newPid);
+          debugLog(`[Hook] SessionStart PID via fallback: ${sessionId.slice(0, 8)} → pid=${newPid}`);
+        }
       }
-      // array(fallback) 결과는 무시 — 다중 세션 PID 오매핑 방지
     });
   }
 
