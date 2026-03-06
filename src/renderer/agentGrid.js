@@ -33,8 +33,17 @@ function updateAgent(agent) {
     }
   }
 
+  // 에이전트 타입 변경 감지 (auto-create로 Main 생성 후 SubagentStart로 Sub 전환 시)
+  const wasSubagent = card.classList.contains('is-subagent');
+  const wasTeammate = card.classList.contains('is-teammate');
+  const typeChanged = (!!agent.isSubagent !== wasSubagent) || (!!agent.isTeammate !== wasTeammate);
+
   updateAgentState(agent.id, card, agent);
-  // 상태 변경은 그리드 레이아웃(열/행 배치)에 영향 없음 — updateGridLayout 생략
+
+  if (typeChanged) {
+    updateGridLayout();
+    requestDynamicResize();
+  }
 }
 
 function removeAgent(data) {

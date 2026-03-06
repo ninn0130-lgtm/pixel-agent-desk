@@ -9,7 +9,7 @@ const path = require('path');
 const { formatSlugToDisplayName } = require('./utils');
 
 // AVATAR_FILES 개수 (renderer/config.js, office/office-config.js와 동기화)
-const AVATAR_COUNT = 24;
+const AVATAR_COUNT = 23;
 
 class AgentManager extends EventEmitter {
   constructor() {
