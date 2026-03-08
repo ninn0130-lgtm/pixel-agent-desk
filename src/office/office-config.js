@@ -119,11 +119,6 @@ const STATE_COLORS = {
 var AVATAR_FILES = [
   'avatar_0.webp','avatar_1.webp','avatar_2.webp','avatar_3.webp',
   'avatar_4.webp','avatar_5.webp','avatar_6.webp','avatar_7.webp',
-  'avatar_8.webp','avatar_9.webp','avatar_09.webp',
-  'avatar_10.webp','avatar_11.webp','avatar_12.webp','avatar_13.webp',
-  'avatar_14.webp','avatar_15.webp','avatar_16.webp','avatar_17.webp',
-  'avatar_18.webp','avatar_19.webp','avatar_20.webp','avatar_21.webp',
-  'avatar_22.webp',
 ];
 
 /**
