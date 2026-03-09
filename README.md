@@ -1,6 +1,6 @@
 # Pixel Agent Desk
 
-[![CI](https://github.com/geunilbae/pixel-agent-desk/actions/workflows/test.yml/badge.svg)](https://github.com/geunilbae/pixel-agent-desk/actions/workflows/test.yml)
+[![CI](https://github.com/Mgpixelart/pixel-agent-desk/actions/workflows/test.yml/badge.svg)](https://github.com/Mgpixelart/pixel-agent-desk/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-32+-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 
@@ -31,7 +31,7 @@ Pixel Agent Desk is a standalone Electron app that listens to [Claude Code](http
 ## Quick Start
 
 ```bash
-git clone https://github.com/geunilbae/pixel-agent-desk.git
+git clone https://github.com/Mgpixelart/pixel-agent-desk.git
 cd pixel-agent-desk
 npm install   # Installs dependencies + auto-registers Claude CLI hooks
 npm start     # Launches the Electron app
@@ -54,23 +54,23 @@ npm start     # Launches the Electron app
 ## How It Works
 
 ```
-Claude CLI ──HTTP hook──▶ POST(:47821) ──▶ hookProcessor
-                                              │
-                                    ┌─────────┤
-                                    ▼         ▼
-                              AgentManager  Agent Desk Server
-                                (SSoT)      (:3000, SSE/REST)
-                                  │               │
-                        ┌─────────┼─────┐    ┌────┼────────────┐
-                        ▼         ▼     ▼    ▼    ▼            ▼
-                    renderer/*  scanner  │  Office  Agents   Tokens
-                   (pixel avatar) (JSONL)│  (Canvas 2D)     (Charts)
-                                         ▼
-                                    Heatmap
-                                  (GitHub-style)
+Claude CLI ──stdin──▶ hook.js ──HTTP──▶ POST(:47821) ──▶ hookProcessor
+                                                              │
+                                                    ┌─────────┤
+                                                    ▼         ▼
+                                              AgentManager  Agent Desk Server
+                                                (SSoT)      (:3000, SSE/REST)
+                                                  │               │
+                                        ┌─────────┼─────┐    ┌────┼────────────┐
+                                        ▼         ▼     ▼    ▼    ▼            ▼
+                                    renderer/*  scanner  │  Office  Agents   Tokens
+                                   (pixel avatar) (JSONL)│  (Canvas 2D)     (Charts)
+                                                         ▼
+                                                    Heatmap
+                                                  (GitHub-style)
 ```
 
-1. Claude Code CLI sends hook events (SessionStart, PreToolUse, PostToolUse, etc.) as HTTP POST to port 47821
+1. Claude Code CLI spawns `hook.js` per event (stdin), which forwards the payload as HTTP POST to port 47821
 2. The hook processor maps events to agent states and updates the central AgentManager
 3. The pixel renderer draws animated avatars; the dashboard serves a web UI with real-time updates
 4. PID-based liveness checking automatically removes stale agents when processes exit
@@ -82,19 +82,28 @@ Claude CLI ──HTTP hook──▶ POST(:47821) ──▶ hookProcessor
 | `SessionStart` | Waiting |
 | `UserPromptSubmit` | Thinking |
 | `PreToolUse` (2nd+) | Working |
-| `PostToolUse` | Thinking (idle 2.5s → Done) |
+| `PostToolUse` | Thinking (+ token usage update) |
+| `PostToolUseFailure` | Error |
+| `PermissionRequest` | Help |
+| `Notification` (permission/elicitation) | Help |
 | `Stop` / `TaskCompleted` | Done |
-| `Notification` | Help |
+| `PreCompact` | Thinking (grace period extended) |
+| `SubagentStart` | child agent created (Working) |
+| `SubagentStop` | child agent removed |
+| `TeammateIdle` | teammate agent created/updated (Waiting) |
 | `SessionEnd` | Removed |
+
+Working→Thinking transitions are debounced 500ms to prevent flickering. Parent agents reflect their worst child state (Help > Working > own state).
 
 ## Project Structure
 
 ```
 src/
 ├── main.js                    # App orchestrator
+├── hook.js                    # Hook forwarder: stdin → HTTP :47821
 ├── main/
 │   ├── hookServer.js          # HTTP hook server (:47821)
-│   ├── hookProcessor.js       # Event processing logic
+│   ├── hookProcessor.js       # Event processing logic (~18 event types)
 │   ├── hookRegistration.js    # Claude CLI hook auto-registration
 │   ├── livenessChecker.js     # PID-based liveness checking
 │   ├── windowManager.js       # Electron window management
@@ -113,7 +122,7 @@ src/
 public/
 ├── dashboard.css              # Dashboard styles
 ├── dashboard.js               # Dashboard client logic
-├── characters/                # Pixel avatar sprites (23 characters)
+├── characters/                # Pixel avatar sprites (8 characters)
 └── office/                    # Office tilemap & object sprites
 ```
 
@@ -124,15 +133,25 @@ Hooks are auto-registered as HTTP type in `~/.claude/settings.json`:
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
-    "PreToolUse":   [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
-    "PostToolUse":  [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }]
+    "SessionStart":        [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "SessionEnd":          [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "UserPromptSubmit":    [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "PreToolUse":          [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "PostToolUse":         [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "PostToolUseFailure":  [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "Stop":                [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "TaskCompleted":       [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "PermissionRequest":   [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "Notification":        [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "SubagentStart":       [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "SubagentStop":        [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "TeammateIdle":        [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }],
+    "PreCompact":          [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://localhost:47821/hook" }] }]
   }
 }
 ```
 
-If auto-registration fails, add the entries above manually for all supported events:
-`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `Notification`, `SubagentStart`, `SubagentStop`, `TeammateIdle`.
+If auto-registration fails, add the entries above manually. Registration status is checked on every app startup.
 
 ## Troubleshooting
 
