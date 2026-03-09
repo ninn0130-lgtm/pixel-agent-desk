@@ -97,13 +97,13 @@ function registerClaudeHooks(debugLog) {
 
   for (const event of hookEvents) {
     if (!Array.isArray(config.hooks[event])) {
-      // 이벤트에 훅이 없으면 새로 생성
+      // No hook for this event yet — create a new entry
       config.hooks[event] = [ourEntry];
     } else if (!config.hooks[event].some(entry => hasOurHookInEntry(entry, HTTP_HOOK_URL))) {
-      // 기존 훅 보존하고 우리 훅만 추가
+      // Preserve existing hooks and append ours
       config.hooks[event].push(ourEntry);
     }
-    // 이미 등록돼 있으면 건드리지 않음
+    // Already registered — leave it untouched
   }
 
   if (writeClaudeConfig(config, debugLog)) {

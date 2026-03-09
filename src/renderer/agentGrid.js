@@ -346,13 +346,13 @@ function updateGridLayout() {
 
   // In-place grid position update (no DOM remove/re-insert to prevent flickering)
   let col = 1;
-  const currentRow = 1;
+  let currentRow = 1;
 
   // Remove stale party backgrounds
   agentGrid.querySelectorAll('.agent-party-bg').forEach(el => el.remove());
 
   sorted.forEach(item => {
-    if (col > 10) { col = 1; }
+    if (col > 10) { col = 1; currentRow++; }
 
     item.card.classList.remove('group-start');
     item.card.style.gridColumn = col;

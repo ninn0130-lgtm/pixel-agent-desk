@@ -49,8 +49,23 @@ const agents = [
   { id: 'demo-agent-12', cwd: '/projects/search-engine',     model: 'claude-sonnet-4-6',  scenario: 'short'   },
 ];
 
+// ─── Subagents (spawned mid-run inside parent sessions) ───
+// Each: { parentId, id, cwd, agent_type, spawnAfterMs, durationMs }
+const subagents = [
+  { parentId: 'demo-agent-01', id: 'demo-sub-01a', cwd: '/projects/pixel-agent-desk', agent_type: 'research',  spawnAfterMs: 8000,  durationMs: 18000 },
+  { parentId: 'demo-agent-01', id: 'demo-sub-01b', cwd: '/projects/pixel-agent-desk', agent_type: 'edit',      spawnAfterMs: 15000, durationMs: 12000 },
+  { parentId: 'demo-agent-02', id: 'demo-sub-02a', cwd: '/projects/web-app',          agent_type: 'research',  spawnAfterMs: 6000,  durationMs: 20000 },
+  { parentId: 'demo-agent-07', id: 'demo-sub-07a', cwd: '/projects/backend-api',      agent_type: 'test',      spawnAfterMs: 10000, durationMs: 15000 },
+];
+
+// ─── Teammates (independent agents in a shared team) ───
+const teammates = [
+  { id: 'demo-teammate-01', cwd: '/projects/design-system',  teammate_name: 'Designer-A', team_name: 'frontend-squad', spawnAfterMs: 5000  },
+  { id: 'demo-teammate-02', cwd: '/projects/shared-lib',     teammate_name: 'Reviewer-B', team_name: 'frontend-squad', spawnAfterMs: 12000 },
+];
+
 const tools = ['Bash', 'Read', 'Edit', 'Write', 'Grep', 'Glob', 'WebSearch', 'WebFetch'];
-const scenarioCycles = { short: 3, medium: 6, long: 10 };
+const scenarioCycles = { short: 8, medium: 14, long: 20 };
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function randTokens(base) { return base + Math.floor(Math.random() * base * 0.5); }
@@ -129,9 +144,51 @@ async function simulateAgent(agent, delayOffset) {
   });
 }
 
+async function simulateSubagent(sub) {
+  await sleep(sub.spawnAfterMs);
+  const ts = () => Date.now();
+
+  console.log(`[${sub.id}] SubagentStart (parent: ${sub.parentId})`);
+  await sendHook({
+    hook_event_name: 'SubagentStart',
+    session_id: sub.parentId,
+    agent_id: sub.id,
+    cwd: sub.cwd,
+    agent_type: sub.agent_type,
+    _timestamp: ts(),
+  });
+
+  await sleep(sub.durationMs);
+
+  console.log(`[${sub.id}] SubagentStop`);
+  await sendHook({
+    hook_event_name: 'SubagentStop',
+    session_id: sub.parentId,
+    agent_id: sub.id,
+    last_assistant_message: 'Subtask done.',
+    _timestamp: ts(),
+  });
+}
+
+async function simulateTeammate(tm) {
+  await sleep(tm.spawnAfterMs);
+  const ts = () => Date.now();
+
+  console.log(`[${tm.id}] TeammateIdle: ${tm.teammate_name} (${tm.team_name})`);
+  await sendHook({
+    hook_event_name: 'TeammateIdle',
+    session_id: tm.id,
+    cwd: tm.cwd,
+    teammate_name: tm.teammate_name,
+    team_name: tm.team_name,
+    _timestamp: ts(),
+  });
+}
+
 async function main() {
   console.log('=== Demo Simulation Start ===');
-  console.log(`Agents: ${agents.length} | Make sure npm start is running\n`);
+  console.log(`Agents: ${agents.length} | Subagents: ${subagents.length} | Teammates: ${teammates.length}`);
+  console.log('Make sure npm start is running\n');
 
   try {
     await sendHook({ hook_event_name: 'SessionStart', session_id: '__test__', cwd: '/tmp', _timestamp: Date.now() });
@@ -143,15 +200,23 @@ async function main() {
 
   console.log('Connected. Launching agents...\n');
 
-  // Stagger starts: 1.5s apart so they don't all arrive at once
-  const promises = agents.map((ag, i) => simulateAgent(ag, i * 1500));
-  await Promise.all(promises);
+  // Stagger main agent starts: 1.5s apart
+  const mainPromises = agents.map((ag, i) => simulateAgent(ag, i * 1500));
+  // Subagents and teammates run in parallel (delays are absolute from script start)
+  const subPromises = subagents.map(sub => simulateSubagent(sub));
+  const tmPromises = teammates.map(tm => simulateTeammate(tm));
 
-  console.log('\n=== All agents done. Waiting 10s before cleanup... ===');
-  await sleep(10000);
+  await Promise.all([...mainPromises, ...subPromises, ...tmPromises]);
+
+  console.log('\n=== All agents done. Waiting 60s before cleanup... ===');
+  await sleep(60000);
 
   for (const ag of agents) {
     await sendHook({ hook_event_name: 'SessionEnd', session_id: ag.id, _timestamp: Date.now() });
+    await sleep(300);
+  }
+  for (const tm of teammates) {
+    await sendHook({ hook_event_name: 'SessionEnd', session_id: tm.id, _timestamp: Date.now() });
     await sleep(300);
   }
 

@@ -24,7 +24,7 @@ Claude CLI ──HTTP hook──▶ POST(:47821) ──▶ hookProcessor
                                   ▼         ┌───┴──────────┐
                             renderer/*      ▼              ▼
                           (pixel avatar) dashboard.html  pip.html
-                                         (agent desk)  (PiP 플로팅)
+                                         (agent desk)  (PiP floating)
 ```
 
 ### Key Modules
@@ -91,18 +91,18 @@ Row 8: front_done_dance(64-67) front_alert_jump(68-71)
 - Desk seated: `sit_{dir}` (idle) or `sit_work_{dir}` (working)
 - Done at idle zone: `IDLE_SEAT_MAP` per spot id (18,28→right / 24→dance / 19,29→left / rest→down)
 
-### PiP (Picture-in-Picture) 모드
+### PiP (Picture-in-Picture) Mode
 
-- 대시보드 Operational Floorplan 패널 헤더의 PiP 버튼으로 열기/닫기
-- 항상-최상위 플로팅 윈도우 (alwaysOnTop: floating), 오피스 맵 비율(864:800) 고정 리사이즈
-- SSE(`/api/events`)로 에이전트 상태 독립 수신 — 대시보드와 캐릭터 위치는 동기화되지 않음 (각각 독립 officeCharacters Map)
-- PiP 활성 시 대시보드 캔버스 숨김 + 플레이스홀더 표시
-- 대시보드 닫기 → PiP도 함께 닫힘
-- 호버 오버레이: Dashboard(돌아가기) + X(닫기) 버튼
+- Open/close via the PiP button in the Operational Floorplan panel header of the dashboard
+- Always-on-top floating window (alwaysOnTop: floating), fixed resize at office map ratio (864:800)
+- Receives agent state independently via SSE (`/api/events`) — character positions are not synced with the dashboard (each maintains its own officeCharacters Map)
+- While PiP is active, the dashboard canvas is hidden and a placeholder is shown
+- Closing the dashboard also closes PiP
+- Hover overlay: Dashboard (back) + X (close) buttons
 
 ### Known Limitation: PID Detection on Windows
 
-- Windows에서 Claude가 JSONL 파일을 열어놓지 않아 transcript_path → PID 감지 실패 가능
-- 다중 세션 시 fallback이 PID를 잘못 매핑할 수 있음 (좀비/고스트 아바타)
-- 정상 사용(1-2 세션)에서는 문제 없음, 발생해도 표시만 불안정
-- 근본 해결은 Claude Code가 hook payload에 PID를 포함하는 것
+- On Windows, Claude does not keep JSONL files open, so transcript_path → PID detection may fail
+- With multiple sessions, the fallback may mis-map PIDs (zombie/ghost avatars)
+- No issue during normal use (1-2 sessions); if it occurs, only display is unstable
+- The root fix requires Claude Code to include PID in the hook payload
