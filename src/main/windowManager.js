@@ -167,6 +167,7 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
       dashboardWindow.on('closed', () => {
         debugLog('[MissionControl] Window closed');
         dashboardWindow = null;
+        closePipWindow();
       });
 
       debugLog('[MissionControl] Window created');
