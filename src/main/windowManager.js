@@ -218,12 +218,29 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: false,
+        devTools: true,
         preload: path.join(__dirname, '..', 'pipPreload.js')
       }
     });
 
     // Office map is 864x800 → aspect ratio 1.08
     pipWindow.setAspectRatio(864 / 800);
+
+    // PiP runs with autoHideMenuBar:true, which removes Electron's default
+    // F12 / Ctrl+Shift+I menu accelerators. Bind them explicitly via
+    // before-input-event so DevTools can still be toggled for diagnostics.
+    pipWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+      const isF12 = input.key === 'F12';
+      const isCtrlShiftI = (input.control || input.meta) && input.shift &&
+        (input.key === 'I' || input.key === 'i');
+      if (isF12 || isCtrlShiftI) {
+        if (pipWindow && !pipWindow.isDestroyed()) {
+          pipWindow.webContents.toggleDevTools();
+        }
+        event.preventDefault();
+      }
+    });
 
     pipWindow.once('ready-to-show', () => {
       if (!pipWindow || pipWindow.isDestroyed()) return;
