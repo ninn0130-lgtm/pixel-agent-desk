@@ -5,6 +5,17 @@
 import { stateConfig, agentStates, agentAvatars, AVATAR_FILES, avatarFromAgentId } from './config.js';
 import { playAnimation } from './animationManager.js';
 
+// Mirror BUBBLE_MAX from src/office/office-character.js so the Working label
+// (tool + ': ' + target) is consistent across mainWindow's compact 72px
+// bubble and the canvas bubbles in dashboardWindow / pipWindow. The bubble
+// CSS clips at 72px with text-overflow:ellipsis already; this cap keeps the
+// JS-level string from growing unboundedly and keeps the hover title sane.
+const BUBBLE_MAX = 38;
+function fitBubbleText(s) {
+  if (!s) return s;
+  return s.length <= BUBBLE_MAX ? s : s.slice(0, BUBBLE_MAX - 1) + '…';
+}
+
 export function updateAgentState(agentId, container, agentOrState) {
   const isAgentObj = typeof agentOrState === 'object';
   const state = isAgentObj ? agentOrState.state : agentOrState;
@@ -12,22 +23,31 @@ export function updateAgentState(agentId, container, agentOrState) {
 
   const baseConfig = stateConfig[state] || stateConfig['Waiting'];
   const config = { ...baseConfig };
+  // fullLabel: untruncated text used for ARIA and hover tooltip. Defaults
+  // to the visible label; overridden when a Working tool/target composes a
+  // longer string than fits the 72px bubble.
+  config.fullLabel = config.label;
 
   if (isAggregated) {
     config.label = "Managing...";
+    config.fullLabel = "Managing...";
   }
 
   const currentTool = isAgentObj ? agentOrState.currentTool : null;
+  const currentToolTarget = isAgentObj ? agentOrState.currentToolTarget : null;
   if (currentTool && state === 'Working') {
-    config.label = currentTool;
+    const full = currentToolTarget ? currentTool + ': ' + currentToolTarget : currentTool;
+    config.fullLabel = full;
+    config.label = fitBubbleText(full);
   }
 
   const bubble = container.querySelector('.agent-bubble');
   const character = container.querySelector('.agent-character');
 
-  // Update ARIA label
+  // Update ARIA label — use fullLabel so screen readers get the untruncated
+  // text (e.g., "Bash: ssh root@host" rather than "Bash: ssh root@h…").
   const agentDisplayName = container.querySelector('.agent-name')?.textContent || 'Agent';
-  container.setAttribute('aria-label', `${agentDisplayName} - ${config.label}`);
+  container.setAttribute('aria-label', `${agentDisplayName} - ${config.fullLabel}`);
 
   // Update container class + data-state for CSS selector targeting
   container.className = `agent-card ${config.class}`;
@@ -77,7 +97,10 @@ export function updateAgentState(agentId, container, agentOrState) {
 
     const elapsed = Date.now() - agentState.startTime;
     agentState.lastFormattedTime = window.electronAPI.formatTime(elapsed);
-    if (bubble) bubble.textContent = config.label;
+    if (bubble) {
+      bubble.textContent = config.label;
+      bubble.title = config.fullLabel;
+    }
     if (timerEl) {
       timerEl.textContent = agentState.lastFormattedTime;
       timerEl.style.visibility = 'visible';
@@ -88,7 +111,10 @@ export function updateAgentState(agentId, container, agentOrState) {
       clearInterval(agentState.timerInterval);
       agentState.timerInterval = null;
     }
-    if (bubble) bubble.textContent = config.label;
+    if (bubble) {
+      bubble.textContent = config.label;
+      bubble.title = config.fullLabel;
+    }
     if (timerEl) {
       timerEl.textContent = agentState.lastFormattedTime || '00:00';
       timerEl.style.visibility = 'visible';
@@ -106,8 +132,10 @@ export function updateAgentState(agentId, container, agentOrState) {
       // Thinking state: show animated dots
       if (state === 'Thinking' && !isAggregated) {
         bubble.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span>';
+        bubble.title = config.fullLabel;
       } else {
         bubble.textContent = config.label;
+        bubble.title = config.fullLabel;
       }
     }
   }
