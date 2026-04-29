@@ -74,6 +74,17 @@ var officeCharacters = {
   },
 
   updateCharacter: function (agentData) {
+    try {
+      const _ctx = (typeof location !== 'undefined' && location.pathname && location.pathname.indexOf('pip') !== -1) ? 'PIP' : 'DASH';
+      console.log('[PIP-DBG][' + _ctx + '] updateCharacter entry', {
+        id: agentData && agentData.id && agentData.id.slice(0, 8),
+        status: agentData && agentData.status,
+        currentTool: agentData && agentData.currentTool,
+        currentToolTarget: agentData && agentData.currentToolTarget,
+        currentToolRaw: agentData && agentData.currentToolRaw,
+        hasTargetField: agentData && Object.prototype.hasOwnProperty.call(agentData, 'currentToolTarget')
+      });
+    } catch (_) {}
     const char = this.characters.get(agentData.id);
     if (!char) {
       this.addCharacter(agentData);
@@ -390,6 +401,18 @@ var officeCharacters = {
   },
 
   _setBubble: function (char, agentData) {
+    try {
+      const _ctx = (typeof location !== 'undefined' && location.pathname && location.pathname.indexOf('pip') !== -1) ? 'PIP' : 'DASH';
+      console.log('[PIP-DBG][' + _ctx + '] _setBubble entry', {
+        id: agentData && agentData.id && agentData.id.slice(0, 8),
+        status: agentData && agentData.status,
+        agentDataTool: agentData && agentData.currentTool,
+        agentDataTarget: agentData && agentData.currentToolTarget,
+        metadataTool: char && char.metadata && char.metadata.tool,
+        metadataTarget: char && char.metadata && char.metadata.toolTarget,
+        metadataStatus: char && char.metadata && char.metadata.status
+      });
+    } catch (_) {}
     let full = null;
     const status = agentData.status || char.metadata.status;
     const agentType = agentData.agentType || char.metadata.agentType;

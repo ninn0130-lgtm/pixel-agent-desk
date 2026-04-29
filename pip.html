@@ -84,7 +84,7 @@
   <script src="/src/office/office-coords.js?v=6"></script>
   <script src="/src/office/office-pathfinder.js?v=6"></script>
   <script src="/src/office/office-sprite.js?v=6"></script>
-  <script src="/src/office/office-character.js?v=9"></script>
+  <script src="/src/office/office-character.js?v=10"></script>
   <script src="/src/office/office-renderer.js?v=6"></script>
   <script src="/src/office/office-ui.js?v=6"></script>
   <script src="/src/office/office-npcs.js?v=7"></script>
@@ -130,7 +130,19 @@
           officeOnAgentCreated(JSON.parse(e.data).data);
         });
         es.addEventListener('agent.updated', function (e) {
-          officeOnAgentUpdated(JSON.parse(e.data).data);
+          try { console.log('[PIP-DBG] SSE agent.updated raw', e.data); } catch (_) {}
+          var parsed = JSON.parse(e.data).data;
+          try {
+            console.log('[PIP-DBG] SSE agent.updated parsed', {
+              id: parsed && parsed.id && parsed.id.slice(0, 8),
+              status: parsed && parsed.status,
+              currentTool: parsed && parsed.currentTool,
+              currentToolTarget: parsed && parsed.currentToolTarget,
+              currentToolRaw: parsed && parsed.currentToolRaw,
+              hasTargetField: parsed && Object.prototype.hasOwnProperty.call(parsed, 'currentToolTarget')
+            });
+          } catch (_) {}
+          officeOnAgentUpdated(parsed);
         });
         es.addEventListener('agent.removed', function (e) {
           officeOnAgentRemoved(JSON.parse(e.data).data);
