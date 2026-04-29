@@ -5,11 +5,21 @@
 
 /* eslint-disable no-unused-vars */
 
-var OFFICE_UI_BASE_Y = -66;
+// -66 is the original (1x sprite) head offset. With OFFICE.SCALE applied to
+// sprite rendering, the head sits higher — recompute per draw.
+var OFFICE_UI_BASE_Y_RAW = -66;
+
+function _officeUiBaseY() {
+  const SCALE = (typeof OFFICE !== 'undefined' && OFFICE.SCALE) || 1;
+  // sprite top edge is at -FRAME_H * SCALE; place tag a couple pixels above.
+  const FH = (typeof OFFICE !== 'undefined' && OFFICE.FRAME_H) || 64;
+  return -(FH * SCALE) - 2;
+}
 
 function drawOfficeNameTag(ctx, agent) {
   const baseX = Math.round(agent.x);
   const footY = Math.round(agent.y);
+  const OFFICE_UI_BASE_Y = _officeUiBaseY();
 
   ctx.save();
   ctx.textAlign = 'center';
@@ -70,7 +80,7 @@ function drawOfficeNameTag(ctx, agent) {
 function drawOfficeBubble(ctx, agent) {
   const now = Date.now();
   const baseX = Math.round(agent.x);
-  const bubbleY = Math.round(agent.y) + OFFICE_UI_BASE_Y - 45;
+  const bubbleY = Math.round(agent.y) + _officeUiBaseY() - 45;
 
   ctx.save();
 

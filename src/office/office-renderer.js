@@ -119,10 +119,14 @@ var officeRenderer = {
     for (let j = 0; j < sorted.length; j++) {
       const agent = sorted[j];
 
+      const SCALE = OFFICE.SCALE || 1;
+
       if (agent.agentState === 'error') {
-        if (Math.random() < 0.1) this.spawnEffect('warning', agent.x, agent.y - 65);
+        if (Math.random() < 0.1) this.spawnEffect('warning', agent.x, agent.y - 65 * SCALE);
       }
 
+      // SCALE is already applied inside drawOfficeSprite (sprite frame size).
+      // baseScale here is a relative multiplier for sub-agents (slightly smaller).
       const isSubType = agent.metadata && agent.metadata.type === 'sub';
       const baseScale = isSubType ? 0.85 : 1.0;
 

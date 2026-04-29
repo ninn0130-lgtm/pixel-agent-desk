@@ -45,12 +45,16 @@ function drawOfficeSprite(ctx, agent) {
   const sx = (frameIdx % OFFICE.COLS) * OFFICE.FRAME_W;
   const sy = Math.floor(frameIdx / OFFICE.COLS) * OFFICE.FRAME_H;
 
+  const scale = OFFICE.SCALE || 1;
+  const drawW = OFFICE.FRAME_W * scale;
+  const drawH = OFFICE.FRAME_H * scale;
+
   ctx.drawImage(
     img,
     sx, sy, OFFICE.FRAME_W, OFFICE.FRAME_H,
-    Math.round(agent.x - OFFICE.FRAME_W / 2),
-    Math.round(agent.y - OFFICE.FRAME_H),
-    OFFICE.FRAME_W, OFFICE.FRAME_H
+    Math.round(agent.x - drawW / 2),
+    Math.round(agent.y - drawH),
+    drawW, drawH
   );
 }
 

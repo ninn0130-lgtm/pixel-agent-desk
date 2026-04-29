@@ -16,6 +16,10 @@ const OFFICE = {
   IDLE_ANIM_INTERVAL: 1000 / 2,
   MOVE_SPEED: 110,
   ARRIVE_THRESHOLD: 2,
+  // Sprite render scale. Single source of truth — adjust here to resize all
+  // characters uniformly (1.5/2/2.5 etc). Pixel smoothing is disabled, so
+  // integer multiples preserve crispness.
+  SCALE: 2,
 };
 
 // SPRITE_FRAMES — office uses different key names (direction-based) than the raw JSON.

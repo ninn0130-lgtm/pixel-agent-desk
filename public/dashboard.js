@@ -227,8 +227,9 @@ function hitTestOfficeCharacter(canvas, event) {
   // Reverse Y-sort: topmost (highest y) rendered last, so check first
   const sorted = [...chars].sort((a, b) => b.y - a.y);
 
-  const FW = (typeof OFFICE !== 'undefined' && OFFICE.FRAME_W) || 48;
-  const FH = (typeof OFFICE !== 'undefined' && OFFICE.FRAME_H) || 64;
+  const SCALE = (typeof OFFICE !== 'undefined' && OFFICE.SCALE) || 1;
+  const FW = ((typeof OFFICE !== 'undefined' && OFFICE.FRAME_W) || 48) * SCALE;
+  const FH = ((typeof OFFICE !== 'undefined' && OFFICE.FRAME_H) || 64) * SCALE;
 
   for (const ch of sorted) {
     const left = ch.x - FW / 2;
@@ -270,8 +271,9 @@ function showOfficePopover(canvas, char) {
 
   // Position near the character
   const rect = canvas.getBoundingClientRect();
-  const FW = (typeof OFFICE !== 'undefined' && OFFICE.FRAME_W) || 48;
-  const FH = (typeof OFFICE !== 'undefined' && OFFICE.FRAME_H) || 64;
+  const SCALE = (typeof OFFICE !== 'undefined' && OFFICE.SCALE) || 1;
+  const FW = ((typeof OFFICE !== 'undefined' && OFFICE.FRAME_W) || 48) * SCALE;
+  const FH = ((typeof OFFICE !== 'undefined' && OFFICE.FRAME_H) || 64) * SCALE;
   const scaleX = rect.width / canvas.width;
   const scaleY = rect.height / canvas.height;
   const screenX = rect.left + (char.x - FW / 2) * scaleX;
