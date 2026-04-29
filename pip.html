@@ -84,7 +84,7 @@
   <script src="/src/office/office-coords.js?v=6"></script>
   <script src="/src/office/office-pathfinder.js?v=6"></script>
   <script src="/src/office/office-sprite.js?v=6"></script>
-  <script src="/src/office/office-character.js?v=8"></script>
+  <script src="/src/office/office-character.js?v=9"></script>
   <script src="/src/office/office-renderer.js?v=6"></script>
   <script src="/src/office/office-ui.js?v=6"></script>
   <script src="/src/office/office-npcs.js?v=7"></script>
@@ -94,6 +94,13 @@
     (function () {
       var sseDelay = 1000;
       var sseSource = null;
+      // initOffice already fetches /api/agents and seeds the office on first
+      // boot. Re-fetching on the initial 'connected' event creates a race:
+      // the snapshot returned by the second fetch can be older than live
+      // agent.updated events that arrived in between, clobbering fresh
+      // tool targets with stale nulls. Skip the re-seed on first connect;
+      // only re-fetch on reconnects (where missed events need recovery).
+      var firstConnect = true;
 
       function connectSSE() {
         if (sseSource) { sseSource.close(); sseSource = null; }
@@ -110,6 +117,10 @@
 
         es.addEventListener('connected', function () {
           sseDelay = 1000;
+          if (firstConnect) {
+            firstConnect = false;
+            return; // initOffice already seeded
+          }
           fetch('/api/agents').then(function (r) { return r.json(); })
             .then(function (agents) {
               agents.forEach(function (a) { officeOnAgentCreated(a); });

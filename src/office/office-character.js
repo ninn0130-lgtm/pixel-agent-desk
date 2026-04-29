@@ -86,9 +86,23 @@ var officeCharacters = {
     char.role = agentData.name || char.role;
     char.metadata.name = agentData.name || char.metadata.name;
     char.metadata.project = agentData.project || char.metadata.project;
-    char.metadata.tool = agentData.currentTool || null;
-    char.metadata.toolTarget = agentData.currentToolTarget || null;
-    char.metadata.toolRaw = agentData.currentToolRaw || null;
+
+    // Tool fields: preserve last-known toolTarget across partial updates that
+    // drop the field. Without this guard, a stale /api/agents snapshot racing
+    // against live agent.updated SSE events (PiP fetches twice on boot:
+    // initOffice + 'connected' handler) can clobber a fresh target with null.
+    // Only clear toolTarget when the tool itself changes or clears, OR when
+    // the new payload provides an explicit non-empty target.
+    const prevTool = char.metadata.tool;
+    const newTool = agentData.currentTool || null;
+    char.metadata.tool = newTool;
+    if (agentData.currentToolTarget) {
+      char.metadata.toolTarget = agentData.currentToolTarget;
+    } else if (!newTool || newTool !== prevTool) {
+      char.metadata.toolTarget = null;
+    }
+    // else: same tool, no new target → keep last-known target
+    char.metadata.toolRaw = agentData.currentToolRaw || char.metadata.toolRaw || null;
     char.metadata.agentType = agentData.agentType || char.metadata.agentType;
     char.metadata.status = agentData.status || 'idle';
     char.metadata.type = agentData.type || char.metadata.type;
@@ -382,8 +396,12 @@ var officeCharacters = {
     const prefix = agentType ? '[' + (agentType.length > 14 ? agentType.slice(0, 13) + '…' : agentType) + '] ' : '';
 
     if (status === 'working') {
-      const tool = agentData.currentTool;
-      const tgt  = agentData.currentToolTarget;
+      const tool = agentData.currentTool || char.metadata.tool;
+      // Fall back to char.metadata.toolTarget so a partial update that drops
+      // the field (stale snapshot, race, etc.) cannot clobber the bubble.
+      // updateCharacter preserves metadata.toolTarget when the tool is
+      // unchanged, so this fallback yields the last-known good target.
+      const tgt  = agentData.currentToolTarget || char.metadata.toolTarget;
       if (tool) full = prefix + (tgt ? tool + ': ' + tgt : tool);
     } else if (status === 'thinking') {
       const lm = (agentData.lastMessage || '').replace(/\s+/g, ' ').trim();
