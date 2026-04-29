@@ -24,6 +24,106 @@ function computeTokenUsage(agent, tokenUsage) {
 }
 
 /**
+ * Extract a short, human-readable target descriptor from a tool_input payload.
+ * Returns { target: string|null, raw: string|null } — `target` fits in a label,
+ * `raw` is the untruncated value for future hover display (capped at 500 chars).
+ */
+function extractToolTarget(toolName, toolInput) {
+  if (!toolInput || typeof toolInput !== 'object') return { target: null, raw: null };
+
+  const clean = (s) => {
+    if (s == null) return '';
+    const str = String(s);
+    // eslint-disable-next-line no-control-regex
+    const ansi = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+    // eslint-disable-next-line no-control-regex
+    const ctrl = new RegExp('[\\x00-\\x1F\\x7F]', 'g');
+    return str.replace(ansi, '').replace(ctrl, ' ').replace(/\s+/g, ' ').trim();
+  };
+  const cap = (s, n) => (s.length <= n ? s : s.slice(0, n));
+  const last2 = (p) => {
+    const norm = String(p).replace(/\\/g, '/');
+    const parts = norm.split('/').filter(Boolean);
+    return parts.slice(-2).join('/');
+  };
+  const basename = (p) => {
+    const norm = String(p).replace(/\\/g, '/');
+    const parts = norm.split('/').filter(Boolean);
+    return parts[parts.length - 1] || norm;
+  };
+
+  try {
+    switch (toolName) {
+      case 'Bash': {
+        const cmd = clean(toolInput.command);
+        return { target: cap(cmd, 30), raw: cap(cmd, 500) };
+      }
+      case 'Read':
+      case 'Edit':
+      case 'Write':
+      case 'NotebookEdit': {
+        const fp = toolInput.file_path || toolInput.notebook_path || '';
+        if (!fp) return { target: null, raw: null };
+        const bn = basename(fp);
+        const target = bn.length <= 30 ? bn : last2(fp);
+        return { target: cap(clean(target), 30), raw: cap(clean(fp), 500) };
+      }
+      case 'MultiEdit': {
+        const fp = toolInput.file_path || '';
+        const n = Array.isArray(toolInput.edits) ? toolInput.edits.length : 0;
+        if (!fp) return { target: null, raw: null };
+        const bn = basename(fp);
+        const target = `${bn} (${n}x)`;
+        return { target: cap(clean(target), 30), raw: cap(clean(`${fp} (${n} edits)`), 500) };
+      }
+      case 'Grep': {
+        const pat = clean(toolInput.pattern);
+        const target = `"${cap(pat, 28)}"`;
+        const rawExtra = toolInput.glob || toolInput.path || '';
+        const raw = cap(clean(`${pat}${rawExtra ? ' in ' + rawExtra : ''}`), 500);
+        return { target: cap(target, 30), raw };
+      }
+      case 'Glob': {
+        const pat = clean(toolInput.pattern);
+        return { target: cap(pat, 30), raw: cap(pat, 500) };
+      }
+      case 'WebFetch': {
+        const url = clean(toolInput.url);
+        let host = url;
+        try { host = new URL(url).hostname || url; } catch { /* ignore */ }
+        return { target: cap(host, 30), raw: cap(url, 500) };
+      }
+      case 'WebSearch': {
+        const q = clean(toolInput.query);
+        return { target: cap(q, 30), raw: cap(q, 500) };
+      }
+      case 'Task':
+      case 'Agent': {
+        const sub = toolInput.subagent_type || toolInput.description || '';
+        const cleaned = clean(sub);
+        return { target: cap(cleaned, 30), raw: cap(clean(toolInput.description || sub), 500) };
+      }
+      case 'TodoWrite': {
+        const n = Array.isArray(toolInput.todos) ? toolInput.todos.length : 0;
+        return { target: `${n} todos`, raw: cap(JSON.stringify(toolInput.todos || []), 500) };
+      }
+      default: {
+        if (toolName && toolName.startsWith('mcp__')) {
+          const parts = toolName.split('__');
+          const tail = parts[parts.length - 1] || toolName;
+          let raw = '';
+          try { raw = cap(clean(JSON.stringify(toolInput)), 500); } catch { raw = ''; }
+          return { target: cap(tail, 30), raw };
+        }
+        return { target: null, raw: null };
+      }
+    }
+  } catch {
+    return { target: null, raw: null };
+  }
+}
+
+/**
  * Attempt PID reconnection via transcript when an `echo $$` / `echo $PPID` is detected.
  */
 function handlePidReconnect({ agentManager, sessionPids, sessionId, data, debugLog, detectClaudePidByTranscript }) {
@@ -123,7 +223,12 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
         if (agentManager) {
           const agent = agentManager.getAgent(sessionId);
           if (agent) {
-            agentManager.updateAgent({ ...agent, sessionId, state: 'Thinking' }, 'hook');
+            agentManager.updateAgent({
+              ...agent, sessionId, state: 'Thinking',
+              currentTool: null,
+              currentToolTarget: null,
+              currentToolRaw: null,
+            }, 'hook');
           }
         }
         break;
@@ -138,7 +243,13 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
           const agent = agentManager.getAgent(sessionId);
           const lastMsg = data.last_assistant_message || null;
           if (agent) {
-            agentManager.updateAgent({ ...agent, sessionId, state: 'Done', currentTool: null, lastMessage: lastMsg }, 'hook');
+            agentManager.updateAgent({
+              ...agent, sessionId, state: 'Done',
+              currentTool: null,
+              currentToolTarget: null,
+              currentToolRaw: null,
+              lastMessage: lastMsg
+            }, 'hook');
           }
         }
         break;
@@ -151,7 +262,13 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
         } else if (agentManager) {
           const agent = agentManager.getAgent(sessionId);
           if (agent) {
-            agentManager.updateAgent({ ...agent, sessionId, state: 'Working', currentTool: data.tool_name || null }, 'hook');
+            const { target, raw } = extractToolTarget(data.tool_name, data.tool_input);
+            agentManager.updateAgent({
+              ...agent, sessionId, state: 'Working',
+              currentTool: data.tool_name || null,
+              currentToolTarget: target,
+              currentToolRaw: raw,
+            }, 'hook');
           }
         }
         break;
@@ -164,7 +281,10 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
             const rawUsage = data.tool_response && data.tool_response.token_usage;
             const updatedUsage = computeTokenUsage(agent, rawUsage);
             agentManager.updateAgent({
-              ...agent, sessionId, state: 'Thinking', currentTool: null,
+              ...agent, sessionId, state: 'Thinking',
+              currentTool: null,
+              currentToolTarget: null,
+              currentToolRaw: null,
               ...(updatedUsage && { tokenUsage: updatedUsage })
             }, 'hook');
           }
@@ -177,14 +297,30 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
       case 'PostToolUseFailure':
         if (agentManager) {
           const agent = agentManager.getAgent(sessionId);
-          if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Error', currentTool: data.tool_name || null }, 'hook');
+          if (agent) {
+            const { target, raw } = extractToolTarget(data.tool_name, data.tool_input);
+            agentManager.updateAgent({
+              ...agent, sessionId, state: 'Error',
+              currentTool: data.tool_name || null,
+              currentToolTarget: target,
+              currentToolRaw: raw,
+            }, 'hook');
+          }
         }
         break;
 
       case 'PermissionRequest':
         if (agentManager) {
           const agent = agentManager.getAgent(sessionId);
-          if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Help', currentTool: data.tool_name || null }, 'hook');
+          if (agent) {
+            const { target, raw } = extractToolTarget(data.tool_name, data.tool_input);
+            agentManager.updateAgent({
+              ...agent, sessionId, state: 'Help',
+              currentTool: data.tool_name || null,
+              currentToolTarget: target,
+              currentToolRaw: raw,
+            }, 'hook');
+          }
         }
         break;
 
@@ -197,7 +333,15 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
 
         if (agentManager) {
           const agent = agentManager.getAgent(sessionId);
-          if (agent) agentManager.updateAgent({ ...agent, sessionId, state: notifState }, 'hook');
+          if (agent) {
+            const updateData = { ...agent, sessionId, state: notifState };
+            if (notifState !== 'Help') {
+              updateData.currentTool = null;
+              updateData.currentToolTarget = null;
+              updateData.currentToolRaw = null;
+            }
+            agentManager.updateAgent(updateData, 'hook');
+          }
         }
         break;
       }
@@ -236,7 +380,10 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
           if (agent) {
             agentManager.updateAgent({
               ...agent, state: 'Waiting', isTeammate: true,
-              teammateName, teamName, currentTool: null
+              teammateName, teamName,
+              currentTool: null,
+              currentToolTarget: null,
+              currentToolRaw: null,
             }, 'hook');
           } else {
             handleSessionStart(sessionId, data.cwd || '', 0, true, false, 'Waiting', null, {

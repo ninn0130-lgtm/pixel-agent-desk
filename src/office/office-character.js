@@ -5,6 +5,12 @@
 
 /* eslint-disable no-unused-vars */
 
+var BUBBLE_MAX = 38;
+function fitBubbleText(s) {
+  if (!s) return s;
+  return s.length <= BUBBLE_MAX ? s : s.slice(0, BUBBLE_MAX - 1) + '…';
+}
+
 var officeCharacters = {
   characters: new Map(),
   seatAssignments: new Map(), // deskIndex → agentId
@@ -45,9 +51,13 @@ var officeCharacters = {
         name: agentData.name || 'Agent',
         project: agentData.project || '',
         tool: agentData.currentTool || null,
+        toolTarget: agentData.currentToolTarget || null,
+        toolRaw: agentData.currentToolRaw || null,
+        agentType: agentData.agentType || null,
         type: agentData.type || 'main',
         status: agentData.status || 'idle',
         lastMessage: agentData.lastMessage || null,
+        bubbleFullText: null,
       },
     };
 
@@ -77,6 +87,9 @@ var officeCharacters = {
     char.metadata.name = agentData.name || char.metadata.name;
     char.metadata.project = agentData.project || char.metadata.project;
     char.metadata.tool = agentData.currentTool || null;
+    char.metadata.toolTarget = agentData.currentToolTarget || null;
+    char.metadata.toolRaw = agentData.currentToolRaw || null;
+    char.metadata.agentType = agentData.agentType || char.metadata.agentType;
     char.metadata.status = agentData.status || 'idle';
     char.metadata.type = agentData.type || char.metadata.type;
     char.metadata.lastMessage = agentData.lastMessage || char.metadata.lastMessage;
@@ -318,27 +331,39 @@ var officeCharacters = {
   },
 
   _setBubble: function (char, agentData) {
-    let text = null;
-    let icon = null;
+    let full = null;
     const status = agentData.status || char.metadata.status;
+    const agentType = agentData.agentType || char.metadata.agentType;
+    const prefix = agentType ? '[' + (agentType.length > 14 ? agentType.slice(0, 13) + '…' : agentType) + '] ' : '';
 
-    if (status === 'working' && agentData.currentTool) {
-      text = agentData.currentTool;
-      icon = null;
+    if (status === 'working') {
+      const tool = agentData.currentTool;
+      const tgt  = agentData.currentToolTarget;
+      if (tool) full = prefix + (tgt ? tool + ': ' + tgt : tool);
     } else if (status === 'thinking') {
-      text = 'Thinking...';
+      const lm = (agentData.lastMessage || '').replace(/\s+/g, ' ').trim();
+      full = prefix + (lm ? lm.slice(0, 30) : 'Thinking…');
     } else if (status === 'completed' || status === 'done') {
-      text = 'Done!';
+      full = 'Done!';
     } else if (status === 'help') {
-      text = 'Need help!';
+      full = 'Need help!';
     } else if (status === 'error') {
-      text = 'Error!';
+      full = 'Error!';
     }
 
-    if (text) {
-      // working/thinking/help/error states are displayed persistently while active
+    if (full) {
+      const display = fitBubbleText(full);
       const isPersistent = (status === 'working' || status === 'thinking' || status === 'help' || status === 'error');
-      char.bubble = { text: text, icon: icon, expiresAt: isPersistent ? Infinity : Date.now() + 8000 };
+      char.bubble = {
+        text: display,
+        fullText: full,
+        icon: null,
+        expiresAt: isPersistent ? Infinity : Date.now() + 8000
+      };
+      char.metadata.bubbleFullText = full;
+    } else {
+      char.bubble = null;
+      char.metadata.bubbleFullText = null;
     }
   },
 

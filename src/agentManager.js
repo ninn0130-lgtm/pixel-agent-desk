@@ -95,6 +95,8 @@ class AgentManager extends EventEmitter {
       source: m('source'),
       agentType: m('agentType'),
       currentTool: m('currentTool'),
+      currentToolTarget: m('currentToolTarget'),
+      currentToolRaw: m('currentToolRaw'),
       lastMessage: m('lastMessage'),
       endReason: m('endReason'),
       teammateName: m('teammateName'),

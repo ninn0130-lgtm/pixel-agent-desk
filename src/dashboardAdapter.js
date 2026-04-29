@@ -88,6 +88,9 @@ function adaptAgentToDashboard(pixelAgent) {
     model: pixelAgent.model || null,
     tokenUsage: pixelAgent.tokenUsage || { inputTokens: 0, outputTokens: 0, estimatedCost: 0 },
     currentTool: pixelAgent.currentTool || null,
+    currentToolTarget: pixelAgent.currentToolTarget || null,
+    currentToolRaw: pixelAgent.currentToolRaw || null,
+    agentType: pixelAgent.agentType || null,
     lastMessage: pixelAgent.lastMessage || null,
     avatarIndex: pixelAgent.avatarIndex !== undefined ? pixelAgent.avatarIndex : null,
     metadata: {
