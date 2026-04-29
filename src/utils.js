@@ -42,7 +42,7 @@ function getWindowSizeForAgents(agentsOrCount) {
 
   if (count <= 1) return { width: 150, height: 175 };
 
-  const CARD_W = 80;
+  const CARD_W = 170;
   const GAP = 10;
   const OUTER = 100;
   const BASE_H = 170;
