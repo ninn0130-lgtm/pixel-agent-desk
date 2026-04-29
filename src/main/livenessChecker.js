@@ -97,7 +97,7 @@ function retryPidDetection(sessionId, agentManager, debugLog) {
       debugLog(`[Live] PID assigned via transcript: ${sessionId.slice(0, 8)} → pid=${result}`);
     } else if (Array.isArray(result)) {
       const registeredPids = new Set(sessionPids.values());
-      const newPid = result.find(p => !registeredPids.has(p));
+      const newPid = result.find(p => !registeredPids.has(p) && p !== process.pid);
       if (newPid) {
         sessionPids.set(sessionId, newPid);
         debugLog(`[Live] PID assigned via fallback: ${sessionId.slice(0, 8)} → pid=${newPid}`);
@@ -213,7 +213,7 @@ function startLivenessChecker({ agentManager, debugLog }) {
           if (typeof result === 'number') resolve(result);
           else if (Array.isArray(result)) {
             const registeredPids = new Set(sessionPids.values());
-            resolve(result.find(p => !registeredPids.has(p) && p !== pid) || null);
+            resolve(result.find(p => !registeredPids.has(p) && p !== pid && p !== process.pid) || null);
           } else resolve(null);
         });
       });
@@ -225,6 +225,15 @@ function startLivenessChecker({ agentManager, debugLog }) {
           agentManager.updateAgent({ ...agent, state: 'Waiting' }, 'live');
         }
       } else {
+        // Solo agent protection: never remove the only remaining agent based on
+        // a PID liveness check (the assigned PID may have been a transient
+        // mismatch from the fallback). Clear PID and let the no-PID branch's
+        // solo protection keep the agent alive for re-detection.
+        if (agentManager.getAgentCount() <= 1) {
+          debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} dead but solo agent → keeping (clearing PID for re-detection)`);
+          sessionPids.delete(agent.id);
+          continue;
+        }
         debugLog(`[Live] ${agent.id.slice(0, 8)} confirmed dead → removing`);
         sessionPids.delete(agent.id);
         agentManager.removeAgent(agent.id);
