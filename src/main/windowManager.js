@@ -229,8 +229,13 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
     // PiP runs with autoHideMenuBar:true, which removes Electron's default
     // F12 / Ctrl+Shift+I menu accelerators. Bind them explicitly via
     // before-input-event so DevTools can still be toggled for diagnostics.
+    // [PIP-DBG TEMPORARY] Every keyDown is logged so we can see whether the
+    // event reaches the webContents at all when the user presses F12 — to be
+    // removed together with the auto-openDevTools below once root cause is
+    // confirmed.
     pipWindow.webContents.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown') return;
+      debugLog(`[PIP-DBG] before-input-event keyDown key=${input.key} code=${input.code} ctrl=${input.control} meta=${input.meta} shift=${input.shift} alt=${input.alt}`);
       const isF12 = input.key === 'F12';
       const isCtrlShiftI = (input.control || input.meta) && input.shift &&
         (input.key === 'I' || input.key === 'i');
@@ -251,6 +256,20 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
     });
 
     pipWindow.loadURL('http://localhost:3000/pip');
+
+    // [PIP-DBG TEMPORARY] Force DevTools open on every PiP launch so we can
+    // capture [PIP-DBG] runtime logs. detach mode keeps the PiP canvas in
+    // view. REVERT this block (and the keyDown debugLog above) once the
+    // bubble-label diagnostic is complete.
+    pipWindow.webContents.once('did-finish-load', () => {
+      if (!pipWindow || pipWindow.isDestroyed()) return;
+      try {
+        pipWindow.webContents.openDevTools({ mode: 'detach' });
+        debugLog('[PIP-DBG] Auto-opened DevTools (detach) for diagnostic capture');
+      } catch (e) {
+        debugLog(`[PIP-DBG] Failed to auto-open DevTools: ${e && e.message}`);
+      }
+    });
 
     pipWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       debugLog(`[PiP] Failed to load: ${errorCode} - ${errorDescription}`);
