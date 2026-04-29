@@ -130,12 +130,21 @@ app.whenReady().then(() => {
   heatmapScanner.start(300_000);
 
   // 3. Create hook processor
+  // Self-tracking exclusion: skip agent registration for Claude sessions
+  // whose cwd is the Pixel Agent Desk project root itself. In dev mode
+  // (npm start) this prevents the user's debug session — running Claude
+  // inside the source tree — from showing up as an agent in the dashboard
+  // the same app is rendering. In prod (electron-builder dist) the app
+  // root is the install dir, so this is effectively a no-op.
+  const _appRoot = path.resolve(__dirname, '..');
   hookProcessor = createHookProcessor({
     agentManager,
     sessionPids,
     debugLog,
     detectClaudePidByTranscript,
+    excludePaths: [_appRoot],
   });
+  debugLog(`[Hook] Self-tracking exclusion: ${_appRoot}`);
 
   // 4. Create window manager
   windowManager = createWindowManager({

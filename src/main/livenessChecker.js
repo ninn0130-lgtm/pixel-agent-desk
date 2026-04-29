@@ -151,8 +151,19 @@ function zombieSweep(agentManager, debugLog) {
     _zombieSweepRunning = false;
     if (processCount >= mainCount) return; // no excess avatars
 
-    const excess = mainCount - processCount;
-    debugLog(`[Live] Zombie sweep: ${processCount} processes, ${mainCount} agents → ${excess} excess`);
+    // Floor guard: never wipe down to zero main agents. The PowerShell
+    // process-count probe can transiently return 0 (timeout, CIM hiccup,
+    // permission glitch), which would otherwise sweep every main agent in
+    // one pass — including the user's active debug session. Cap removals
+    // so at least one main agent always survives.
+    const rawExcess = mainCount - processCount;
+    const excess = Math.min(rawExcess, mainCount - 1);
+    if (excess <= 0) return;
+    if (excess < rawExcess) {
+      debugLog(`[Live] Zombie sweep: ${processCount} processes, ${mainCount} agents → ${rawExcess} excess (capped to ${excess} by floor guard)`);
+    } else {
+      debugLog(`[Live] Zombie sweep: ${processCount} processes, ${mainCount} agents → ${excess} excess`);
+    }
 
     // Sort by jsonl mtime ascending (oldest first)
     const sorted = mainAgents

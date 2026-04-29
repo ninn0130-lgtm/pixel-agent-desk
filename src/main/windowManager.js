@@ -193,8 +193,10 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
 
   // ─── PiP Window ───
   function createPipWindow() {
+    debugLog('[PIP-DBG] createPipWindow ENTRY');
     if (pipWindow && !pipWindow.isDestroyed()) {
       pipWindow.focus();
+      debugLog('[PIP-DBG] createPipWindow re-focus existing');
       return;
     }
 
@@ -247,34 +249,64 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
       }
     });
 
+    // [PIP-DBG TEMPORARY] DevTools auto-open with multiple redundant hooks.
+    // cf5aa2b registered only `did-finish-load`, but the user reports zero
+    // [PIP-DBG] markers in the main-process log — meaning that hook never
+    // fired (or fired before the listener attached, or the renderer crashed
+    // before reaching load completion). This block tries every reasonable
+    // hook and falls back to a 3s safety timer so something will succeed.
+    // REVERT this block (and the keyDown debugLog) once the bubble-label
+    // diagnostic is complete.
+    let _pipDevToolsOpened = false;
+    function openPipDevToolsOnce(via) {
+      if (_pipDevToolsOpened) return;
+      if (!pipWindow || pipWindow.isDestroyed()) return;
+      try {
+        pipWindow.webContents.openDevTools({ mode: 'detach' });
+        _pipDevToolsOpened = true;
+        debugLog(`[PIP-DBG] Auto-opened DevTools (detach) via ${via}`);
+      } catch (e) {
+        debugLog(`[PIP-DBG] openDevTools failed via ${via}: ${e && e.message}`);
+      }
+    }
+
     pipWindow.once('ready-to-show', () => {
       if (!pipWindow || pipWindow.isDestroyed()) return;
       pipWindow.show();
       pipWindow.setAlwaysOnTop(true, 'floating');
       notifyDashboardPipState(true);
       debugLog('[PiP] Window shown');
+      openPipDevToolsOnce('ready-to-show');
     });
+
+    pipWindow.webContents.once('dom-ready', () => {
+      debugLog('[PIP-DBG] webContents dom-ready');
+      openPipDevToolsOnce('dom-ready');
+    });
+
+    pipWindow.webContents.once('did-finish-load', () => {
+      debugLog('[PIP-DBG] webContents did-finish-load');
+      openPipDevToolsOnce('did-finish-load');
+    });
+
+    // Safety net: if no other hook fired within 3s of window creation,
+    // force-open DevTools so the user has SOMETHING to diagnose with.
+    setTimeout(() => openPipDevToolsOnce('safety-timer-3s'), 3000);
 
     pipWindow.loadURL('http://localhost:3000/pip');
-
-    // [PIP-DBG TEMPORARY] Force DevTools open on every PiP launch so we can
-    // capture [PIP-DBG] runtime logs. detach mode keeps the PiP canvas in
-    // view. REVERT this block (and the keyDown debugLog above) once the
-    // bubble-label diagnostic is complete.
-    pipWindow.webContents.once('did-finish-load', () => {
-      if (!pipWindow || pipWindow.isDestroyed()) return;
-      try {
-        pipWindow.webContents.openDevTools({ mode: 'detach' });
-        debugLog('[PIP-DBG] Auto-opened DevTools (detach) for diagnostic capture');
-      } catch (e) {
-        debugLog(`[PIP-DBG] Failed to auto-open DevTools: ${e && e.message}`);
-      }
-    });
 
     pipWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       debugLog(`[PiP] Failed to load: ${errorCode} - ${errorDescription}`);
       if (pipWindow && !pipWindow.isDestroyed()) pipWindow.destroy();
       pipWindow = null;
+    });
+
+    pipWindow.webContents.on('render-process-gone', (event, details) => {
+      debugLog(`[PIP-DBG] render-process-gone reason=${details && details.reason} exitCode=${details && details.exitCode}`);
+    });
+
+    pipWindow.webContents.on('unresponsive', () => {
+      debugLog('[PIP-DBG] webContents unresponsive');
     });
 
     pipWindow.on('closed', () => {

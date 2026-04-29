@@ -152,10 +152,27 @@ function handlePidReconnect({ agentManager, sessionPids, sessionId, data, debugL
   });
 }
 
-function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaudePidByTranscript }) {
+function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaudePidByTranscript, excludePaths = [] }) {
   // Internal state
   const pendingSessionStarts = [];
   const firstPreToolUseDone = new Map(); // sessionId -> boolean
+
+  // Self-tracking exclusion: if a Claude session's cwd matches one of these
+  // paths, skip agent registration. Used to prevent Pixel Agent Desk from
+  // registering an agent for a Claude CLI session running in its own source
+  // tree (a self-debug scenario where the user's session would otherwise
+  // appear in the dashboard the same app is rendering).
+  const _excludeSet = new Set(
+    (excludePaths || []).filter(Boolean).map((p) => path.resolve(p).toLowerCase())
+  );
+  function isExcludedCwd(cwd) {
+    if (!cwd || _excludeSet.size === 0) return false;
+    try {
+      return _excludeSet.has(path.resolve(cwd).toLowerCase());
+    } catch (_) {
+      return false;
+    }
+  }
 
   function processHookEvent(data) {
     const event = data.hook_event_name;
@@ -421,6 +438,10 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
   }
 
   function handleSessionStart(sessionId, cwd, pid = 0, isTeammate = false, isSubagent = false, initialState = 'Waiting', parentId = null, meta = {}) {
+    if (isExcludedCwd(cwd)) {
+      debugLog(`[Hook] SessionStart skipped (excluded cwd): ${sessionId.slice(0, 8)} cwd=${cwd}`);
+      return;
+    }
     if (!agentManager) {
       pendingSessionStarts.push({ sessionId, cwd, ts: Date.now(), isTeammate, isSubagent, initialState, parentId, meta });
       debugLog(`[Hook] SessionStart queued: ${sessionId.slice(0, 8)}`);
