@@ -242,6 +242,8 @@ function hitTestOfficeCharacter(canvas, event) {
 }
 
 function showOfficePopover(canvas, char) {
+  // NPCs are ambient set-dressing — no real agent record, no stats. Skip.
+  if (char && char.isNpc) { hideOfficePopover(); return; }
   const ag = state.agents.get(char.id);
   const name = char.role || (ag && ag.name) || 'Agent';
   const status = (ag && ag.status) || char.agentState || 'idle';

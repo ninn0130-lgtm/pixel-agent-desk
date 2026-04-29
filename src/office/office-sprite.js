@@ -49,6 +49,15 @@ function drawOfficeSprite(ctx, agent) {
   const drawW = OFFICE.FRAME_W * scale;
   const drawH = OFFICE.FRAME_H * scale;
 
+  // NPCs render with reduced sprite alpha so they don't visually compete with
+  // real agents that may share the same avatarIndex. Name-tag dimming alone
+  // isn't enough — the body itself must be muted (design-critic FAIL).
+  const isNpc = agent && agent.isNpc === true;
+  if (isNpc) {
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+  }
+
   ctx.drawImage(
     img,
     sx, sy, OFFICE.FRAME_W, OFFICE.FRAME_H,
@@ -56,6 +65,8 @@ function drawOfficeSprite(ctx, agent) {
     Math.round(agent.y - drawH),
     drawW, drawH
   );
+
+  if (isNpc) ctx.restore();
 }
 
 function isIdleAnim(key) {

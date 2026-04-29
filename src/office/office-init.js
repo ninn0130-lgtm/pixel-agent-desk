@@ -39,6 +39,13 @@ async function initOffice() {
     return;
   }
 
+  // Spawn ambient NPCs (support staff). Must run AFTER officeRenderer.init,
+  // which parses officeCoords and builds the pathfinder. Inserted directly
+  // into officeCharacters.characters — never via SSE / AgentManager.
+  if (typeof officeNpcs !== 'undefined') {
+    try { officeNpcs.spawn(); } catch (e) { console.error('[Office] NPC spawn failed:', e); }
+  }
+
   // Load existing agents
   try {
     const res = await fetch('/api/agents');

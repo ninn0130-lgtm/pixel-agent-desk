@@ -22,6 +22,28 @@ const OFFICE = {
   SCALE: 2,
 };
 
+// NPC walkable zones — rectangular regions in map pixel coordinates where
+// NPCs can wander. These boxes intentionally avoid desk clusters; pathfinder
+// `findNearestWalkable` projects any non-walkable random pick onto the nearest
+// walkable tile, so rough bounds are sufficient. Values are tuned for the
+// 32px-tile collision map used by office_collision.webp.
+const LOUNGE_AREA = {
+  zone: 'lounge',
+  // Center-left living area between the meeting room and desk clusters
+  x1: 96,  y1: 96,
+  x2: 320, y2: 256,
+};
+
+const TERRACE_AREA = {
+  zone: 'terrace',
+  // Lower-right terrace strip (right edge of map, below desk rows)
+  x1: 480, y1: 480,
+  x2: 736, y2: 672,
+};
+
+// Meeting zone is dynamic — derived at runtime from officeCoords.desk where
+// type === 'meeting'. See office-npcs.js spawnNpcs().
+
 // SPRITE_FRAMES — office uses different key names (direction-based) than the raw JSON.
 // Built from sprite-frames.json at init via loadSpriteFrames().
 var SPRITE_FRAMES = {};

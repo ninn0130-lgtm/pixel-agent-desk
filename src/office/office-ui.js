@@ -20,17 +20,26 @@ function drawOfficeNameTag(ctx, agent) {
   const baseX = Math.round(agent.x);
   const footY = Math.round(agent.y);
   const OFFICE_UI_BASE_Y = _officeUiBaseY();
+  const isNpc = agent && agent.isNpc === true;
 
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
 
-  const statusColor = STATE_COLORS[agent.agentState] || STATE_COLORS[agent.metadata.status] || '#94a3b8';
+  // NPCs render dimmed so real agents stay visually prominent.
+  if (isNpc) ctx.globalAlpha = 0.45;
+
+  const statusColor = isNpc
+    ? '#888888'
+    : (STATE_COLORS[agent.agentState] || STATE_COLORS[agent.metadata.status] || '#94a3b8');
 
   // Role label
   ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Malgun Gothic", sans-serif';
   let roleStr = agent.role || agent.metadata.name || 'Agent';
   if (roleStr.length > 20) roleStr = roleStr.slice(0, 19) + '...';
+  // NPC marker: prefix middot so NPCs are textually distinguishable from
+  // real agents even if avatar/dim don't read instantly. Real agents: no prefix.
+  if (isNpc) roleStr = '· ' + roleStr;
 
   const tw = ctx.measureText(roleStr).width;
   const roleBoxW = tw + 16;
@@ -58,7 +67,7 @@ function drawOfficeNameTag(ctx, agent) {
   ctx.font = 'bold 9.5px sans-serif';
   const stateTw = ctx.measureText(displayState).width;
 
-  ctx.globalAlpha = 0.75;
+  ctx.globalAlpha = isNpc ? 0.34 : 0.75; // 0.45 * 0.75 ~= 0.34 (preserve dim)
   ctx.fillStyle = statusColor;
   const paddingX = 10;
   const sBoxW = stateTw + paddingX * 2;
@@ -70,7 +79,7 @@ function drawOfficeNameTag(ctx, agent) {
   ctx.roundRect(sBoxX, sBoxY, sBoxW, sBoxH, sBoxH / 2);
   ctx.fill();
 
-  ctx.globalAlpha = 1.0;
+  ctx.globalAlpha = isNpc ? 0.45 : 1.0;
   ctx.fillStyle = '#ffffff';
   ctx.fillText(displayState, baseX, sBoxY + sBoxH - 3);
 

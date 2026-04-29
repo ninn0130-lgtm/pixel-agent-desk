@@ -164,6 +164,21 @@ var officeCharacters = {
   updateAll: function (deltaSec, deltaMs) {
     const self = this;
     this.characters.forEach(function (char) {
+      if (char.isNpc) {
+        // NPCs get their own wander logic; never enter desk-assignment paths.
+        if (typeof officeNpcs !== 'undefined') officeNpcs.updateNpc(char);
+        // _updateNpcMovement is path-following only — guard against empty path
+        // so an idle-dwelling NPC isn't forced into a walk-frame override
+        // (code-reviewer HIGH #2: contract between updateNpc and movement).
+        if (char.path && char.path.length > 0 && char.pathIndex < char.path.length) {
+          self._updateNpcMovement(char, deltaSec);
+        } else {
+          // No active path → keep the idle pose updateNpc set for us.
+          char.currentAnim = (char.facingDir || 'down') + '_idle';
+        }
+        tickOfficeAnimation(char, deltaMs);
+        return;
+      }
       self._updateTarget(char);
       self._updateMovement(char, deltaSec);
       tickOfficeAnimation(char, deltaMs);
@@ -176,6 +191,34 @@ var officeCharacters = {
         }
       }
     });
+  },
+
+  /** Movement update for NPCs — same path-following as agents but ends in
+   *  a plain idle pose (never sits at desks, never reads SEAT_MAP). */
+  _updateNpcMovement: function (char, deltaSec) {
+    const isArrived = char.path.length === 0 || char.pathIndex >= char.path.length;
+    if (isArrived) {
+      char.currentAnim = (char.facingDir || 'down') + '_idle';
+      return;
+    }
+
+    const target = char.path[char.pathIndex];
+    const dx = target.x - char.x;
+    const dy = target.y - char.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < OFFICE.ARRIVE_THRESHOLD) {
+      char.x = target.x;
+      char.y = target.y;
+      char.pathIndex++;
+    } else {
+      const speed = OFFICE.MOVE_SPEED * deltaSec;
+      char.x += (dx / dist) * speed;
+      char.y += (dy / dist) * speed;
+      const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+      char.facingDir = dir;
+      char.currentAnim = animKeyFromDir(dir, true);
+    }
   },
 
   _updateTarget: function (char) {
